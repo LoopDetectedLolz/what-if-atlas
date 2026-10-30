@@ -70,6 +70,22 @@ Two rules, both load-bearing:
 The repo name *is* the URL path. Renaming the repo changes the public URL and
 the `base` in `vite.config.ts` must change with it.
 
+### Verifying a deploy
+
+```bash
+sh data/scripts/check-deploy.sh
+```
+
+Checks the page, `noindex`, the static assets, and — the one that matters —
+that each PMTiles archive answers a byte range with an **uncompressed 206**.
+
+⚠️ Do not verify byte serving with a plain `curl -r 0-1023`. curl sends no
+`Accept-Encoding` by default, so it gets a correct uncompressed `206` even when
+the site is broken for every real browser. A browser sends `gzip, br`, and a CDN
+that compresses the response cannot honour a byte range — it returns the whole
+archive as a `200`, PMTiles throws, and the map renders nothing while the page
+looks perfectly healthy. This exact failure shipped once; see PLAN.md §8.
+
 ### Keeping it unlisted
 
 `<meta name="robots" content="noindex, nofollow">` is in the HTML — the only

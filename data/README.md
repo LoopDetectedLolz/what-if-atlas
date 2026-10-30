@@ -157,5 +157,6 @@ Full reasoning in [`../PLAN.md`](../PLAN.md) §4.
 | `scripts/fetch-fonts.sh` | Re-downloads the self-hosted UI fonts and regenerates `public/fonts.css`. |
 | `scripts/build-placeholder.mjs` | Builds the probe page's placeholder basemap from Natural Earth 110m. |
 | `scripts/build-icons.sh` | Renders the PWA icons from SVG (needs `brew install librsvg`). |
+| `scripts/check-deploy.sh` | Smoke-tests the **deployed** site, including byte serving the way a browser asks for it. Run after any deploy or CDN change. |
 
 Run all of them from the repository root.
