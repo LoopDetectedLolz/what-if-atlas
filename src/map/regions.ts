@@ -26,7 +26,19 @@ export interface LevelDef {
   source: string;
   /** Layer name inside the PMTiles archive (set by `tippecanoe -l`). */
   sourceLayer: string;
-  /** PMTiles archive, relative to the app base. */
+  /**
+   * PMTiles archive, relative to the app base.
+   *
+   * ⚠️ THE `.gz` SUFFIX IS A LIE, AND IT IS LOAD-BEARING. These files are
+   * plain, UNCOMPRESSED PMTiles archives. The extension is there only because
+   * GitHub Pages gzips any response whose content type it does not recognise
+   * — `.pmtiles` is served as `application/octet-stream` and compressed — and
+   * then answers byte-range requests by slicing the COMPRESSED copy. PMTiles
+   * reads garbage past the first block and no tile ever decodes.
+   *
+   * `application/gzip` is not on that compression list, so ranges come back
+   * from the real bytes. Do not gunzip these files; see PLAN.md section 8.
+   */
   archive: string;
   /** Fill layer id — also what queryRenderedFeatures targets for snapping. */
   fillLayer: string;
@@ -45,7 +57,7 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     level: 'country',
     source: 'countries',
     sourceLayer: 'countries',
-    archive: 'tiles/countries.pmtiles',
+    archive: 'tiles/countries.pmtiles.gz',
     fillLayer: 'country-fill',
     lineLayer: 'country-line',
     activeFrom: 0,
@@ -56,7 +68,7 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     level: 'province',
     source: 'provinces',
     sourceLayer: 'provinces',
-    archive: 'tiles/provinces.pmtiles',
+    archive: 'tiles/provinces.pmtiles.gz',
     fillLayer: 'province-fill',
     lineLayer: 'province-line',
     activeFrom: 4.5,
@@ -67,7 +79,7 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     level: 'urban',
     source: 'urban',
     sourceLayer: 'urban',
-    archive: 'tiles/urban.pmtiles',
+    archive: 'tiles/urban.pmtiles.gz',
     fillLayer: 'urban-fill',
     lineLayer: 'urban-line',
     activeFrom: 8,

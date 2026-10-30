@@ -940,50 +940,34 @@ rather you made than defaulted.
 
 ---
 
-## 8. Known deployment issue: Cloudflare compresses .pmtiles
+## 8. Byte serving on GitHub Pages — solved, and how it misled me twice
 
-**Status: live site deploys, but the map does not render.** Diagnosed
-2026-10-30.
+**Status: fixed 2026-10-30.** The archives are served as `*.pmtiles.gz`.
 
-Cloudflare returns `content-encoding: gzip` on byte-range responses for
-`.pmtiles`, and a compressed byte range is not byte serving. PMTiles then
-receives a `200` with the whole archive instead of a `206` with the requested
-slice, and throws:
+### The fault
 
-> Server returned no content-length header or content-length exceeding request.
-> Check that your storage backend supports HTTP Byte Serving.
+PMTiles reads an archive entirely through HTTP range requests. GitHub Pages
+gzips any response whose content type it does not recognise, and then answers a
+byte-range request by slicing **the compressed copy**. So the first block
+decodes (the magic number is intact), everything after it is garbage, no tile
+ever parses, and the map renders nothing while the page, the manifest, the
+service worker and every JSON file all load perfectly.
 
-Evidence:
+`.pmtiles` is served as `application/octet-stream`, which Pages compresses.
+
+### How to recognise it in one header
 
 ```
-curl -r 0-1023 -H 'Accept-Encoding: gzip, br' .../tiles/countries.pmtiles
-  HTTP/2 206
-  server: cloudflare
-  content-encoding: gzip          <-- the problem
-  content-range: bytes 0-1023/3357828
+content-range: bytes 0-16383/3357828      <-- total is the GZIPPED size
+etag: W/"6ae4fc52-3a4d08"                 <-- weak etag: representation transformed
+                                              0x3a4d08 = 3,820,808 = the real size
 ```
 
-In the browser the same request resolves to `status: 200`, `3,820,808 bytes`
-for a 16 KB range, with `content-range`, `content-length` and
-`content-encoding` all absent.
+The total in `content-range: bytes a-b/TOTAL` **must equal the archive's real
+byte size**. The weak `W/` prefix says the same thing independently, and the
+strong-etag form encodes the true length in hex.
 
-It is Cloudflare, not GitHub Pages: `loopdetectedlolz.github.io/...` 301s to the
-custom domain, so every path reaches the origin through Cloudflare and every
-response carries `server: cloudflare`.
-
-⚠️ **Two weaker checks both gave a false pass here. Use the content-range total.**
-
-1. A bare `curl -r 0-1023` passes, because curl sends no `Accept-Encoding` by
-   default and so gets an uncompressed, correct `206`.
-2. Sending browser-like `Accept-Encoding` and asserting `206` + no
-   `content-encoding` ALSO passes, because Cloudflare will happily serve a range
-   sliced out of a compressed representation while omitting `content-encoding`
-   from the `206`.
-
-The check that cannot be fooled is the total in `content-range: bytes a-b/TOTAL`:
-**TOTAL must equal the real byte size of the archive.** When it is smaller, the
-range came from a compressed copy and PMTiles reads garbage past the first
-block. Observed while the fault was live:
+Observed while the fault was live:
 
 | archive | content-range total | real size |
 |---|---|---|
@@ -991,26 +975,85 @@ block. Observed while the fault was live:
 | provinces.pmtiles | 19,325,567 | 24,188,387 |
 | urban.pmtiles | 4,288,441 | 12,771,423 |
 
-`data/scripts/check-deploy.sh` compares against the local file size for exactly
-this reason.
+### The fix: an extension Pages will not compress
 
-### Fix (preferred): one Cloudflare rule
+Measured on the live host with a 1 MiB payload served under eight extensions:
 
-Rules → **Compression Rules** → Create rule:
+| extension | content type | etag | range total | |
+|---|---|---|---|---|
+| `.png` | image/png | strong | 1,048,576 | safe |
+| `.woff2` | font/woff2 | strong | 1,048,576 | safe |
+| `.mp4` | video/mp4 | strong | 1,048,576 | safe |
+| `.zip` | application/x-zip-compressed | strong | 1,048,576 | safe |
+| `.gz` | application/gzip | strong | 1,048,576 | **chosen** |
+| `.wasm` | application/wasm | weak | 4,402 | broken |
+| `.bin` | application/octet-stream | weak | 4,402 | broken |
+| `.pmtiles` | application/octet-stream | weak | 4,402 | broken |
 
-- **If** URI Path starts with `/what-if-atlas/tiles/`
-- **Then** compression **off**
+**`.gz` over `.png`** because the failure modes are not equally quiet. Nothing
+in the chain ever transforms `application/gzip`, whereas a fake PNG would be
+silently rewritten the day anyone turns on Cloudflare Polish — and a corrupted
+archive looks exactly like this bug all over again. Polish is off on the zone
+today (real PNGs come back byte-identical, no `cf-polished` header), but "off
+today" is not a property worth depending on.
 
-Scoped to the path so the blog keeps compression everywhere else. Do not
-disable Brotli/gzip globally.
+⚠️ **The files are not gzipped.** Do not gunzip them, do not "fix" the
+extension. `src/map/regions.ts`, `data/scripts/build-tiles.sh` and
+`data/README.md` all carry the warning, because the name invites exactly that
+mistake.
 
-### Fix (fallback, if the dashboard is unavailable)
+Byte serving itself is fine once the content type is right: ranges at offset 0,
+mid-file and at the tail all come back byte-identical to the local file.
 
-Implement a PMTiles `Source` that fetches each archive **whole** (one plain
-request, no Range header, so compression is harmless) and serves `getBytes` by
-slicing it locally, persisted in IndexedDB.
+### Three false passes, all mine
 
-This is already the milestone-E5 offline design, so it is not wasted work — but
-it moves 38.9 MB onto first load, which is a poor opening experience on school
-wifi. Best shape is a hybrid: attempt ranges, detect the `200`-with-full-body
-signature, and fall back automatically, so the app works either way.
+Worth recording, because each one looked like proof.
+
+1. **`curl -r 0-1023`** — passes. curl sends no `Accept-Encoding` by default,
+   so it gets an uncompressed, correct `206` while every browser is broken.
+2. **Browser-like `Accept-Encoding` plus "206 and no `content-encoding`"** —
+   passes. A range sliced out of a compressed representation satisfies both
+   conditions; the header is simply absent from the `206`.
+3. **Asking for `Accept-Encoding: identity`** — passes nothing, but it is worth
+   knowing it does not help either: Pages serves the compressed representation
+   regardless of what the client asks for. There is no request-side workaround.
+
+`data/scripts/check-deploy.sh` now checks the content-range total against the
+local file size **and** the etag strength, at two different offsets.
+
+### And it was never Cloudflare
+
+I spent a round on this and sent Dustin to the Cloudflare dashboard for a
+Compression Rule that could not have helped. The disproof is one request:
+
+```
+curl -r 0-16383 https://loopdetectedlolz.github.io/what-if-atlas/tiles/countries.pmtiles
+  content-range: bytes 0-16383/3357828      <-- same wrong total at the origin
+  via: 1.1 varnish                          <-- Fastly, which fronts GitHub Pages
+```
+
+The Pages origin is broken identically, so the compression happens before
+Cloudflare ever sees the response. The earlier note in this section claimed the
+opposite on the grounds that `loopdetectedlolz.github.io` 301s to the custom
+domain — it does, but following the redirect still reaches Pages' own CDN, and
+`server: cloudflare` on the final response says only that Cloudflare proxied
+it, not that Cloudflare transformed it. The Compression Rule is harmless and
+can stay or go.
+
+**The lesson worth keeping:** when a CDN is in the path, test the origin before
+blaming the CDN. One request would have saved the whole detour.
+
+### Still to do: the offline story needs the whole-file source anyway
+
+This fix restores lazy range loading, which is the right runtime behaviour. But
+the PWA requirement in the brief still collides with ranges: `Cache.put()`
+rejects a `206`, so range-loaded tiles cannot be cached by the service worker.
+
+Milestone E5 therefore still implements a PMTiles `Source` that fetches each
+archive whole — one plain `200`, compression harmless, cacheable — and serves
+`getBytes` by slicing locally out of IndexedDB. Per-level and lazy, so crossing
+zoom 4.5 pulls provinces and nothing pulls the 38.9 MB up front.
+
+Once that lands, the `.gz` extension stops being load-bearing. It should stay
+anyway: the range path remains the fast path on first visit.
+

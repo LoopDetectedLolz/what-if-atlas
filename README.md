@@ -77,14 +77,22 @@ sh data/scripts/check-deploy.sh
 ```
 
 Checks the page, `noindex`, the static assets, and — the one that matters —
-that each PMTiles archive answers a byte range with an **uncompressed 206**.
+that each PMTiles archive answers a byte range out of its **real, uncompressed
+bytes**, at two different offsets.
 
-⚠️ Do not verify byte serving with a plain `curl -r 0-1023`. curl sends no
-`Accept-Encoding` by default, so it gets a correct uncompressed `206` even when
-the site is broken for every real browser. A browser sends `gzip, br`, and a CDN
-that compresses the response cannot honour a byte range — it returns the whole
-archive as a `200`, PMTiles throws, and the map renders nothing while the page
-looks perfectly healthy. This exact failure shipped once; see PLAN.md §8.
+⚠️ **The tile archives are named `*.pmtiles.gz` and are not gzipped.** The
+extension is load-bearing: GitHub Pages compresses `application/octet-stream`
+and then slices byte ranges out of the compressed copy, which feeds PMTiles
+garbage and renders an empty map while every other asset loads fine.
+`application/gzip` is a type Pages leaves alone. Do not gunzip them or "fix"
+the name — see PLAN.md §8.
+
+⚠️ Do not verify byte serving with a plain `curl -r 0-1023`, and do not trust
+"got a 206 with no `content-encoding`" either. Both pass while the site is
+broken for every real browser. The check that cannot be fooled is the total in
+`content-range: bytes a-b/TOTAL` against the real file size, plus a strong
+(non-`W/`) etag. Three weaker checks gave false passes here; PLAN.md §8 lists
+them.
 
 ### Keeping it unlisted
 

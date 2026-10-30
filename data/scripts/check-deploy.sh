@@ -7,33 +7,40 @@
 #
 # ⚠️ THE POINT OF THIS SCRIPT IS THE BYTE-SERVING CHECK, AND WHY IT IS FUSSY.
 #
-# PMTiles reads each archive with HTTP range requests. A naive `curl -r 0-1023`
-# PASSES even when the site is broken, because curl sends no Accept-Encoding by
-# default and therefore gets an uncompressed, correct 206. A browser sends
-# `Accept-Encoding: gzip, br`, and a CDN that compresses the response cannot
-# then honour a byte range: it returns the WHOLE archive as a 200, PMTiles
-# throws "Server returned no content-length header...", and the map renders
-# nothing at all while the rest of the page looks perfectly healthy.
+# PMTiles reads each archive entirely through HTTP range requests. A host that
+# compresses the response cannot then honour a byte range against the real
+# bytes — and GitHub Pages does exactly that for any content type it does not
+# recognise, answering the range by slicing the COMPRESSED copy. PMTiles reads
+# garbage past the first block and the map renders nothing at all while every
+# other check on the page passes.
 #
-# Checking the status and the absence of content-encoding is NOT ENOUGH either.
-# Cloudflare can serve a range sliced out of a COMPRESSED representation while
-# omitting content-encoding from the 206. It looks perfect and is still broken.
+# That is why the archives are served as `*.pmtiles.gz` — they are NOT gzipped;
+# `application/gzip` is simply a type Pages leaves alone. See PLAN.md section 8.
+#
+# THREE WEAKER CHECKS EACH GAVE A FALSE PASS ON THIS PROJECT:
+#
+#   1. A bare `curl -r 0-1023` — curl sends no Accept-Encoding by default, so
+#      it gets an uncompressed, correct 206 even when every browser is broken.
+#   2. Browser-like Accept-Encoding plus "is it a 206 with no content-encoding"
+#      — a range sliced out of a compressed representation satisfies both.
+#   3. Asking for `Accept-Encoding: identity` — Pages ignores it and serves the
+#      compressed representation anyway.
 #
 # The check that cannot be fooled is the total in the content-range header:
 #
 #     content-range: bytes 0-16383/<total>
 #
-# <total> must equal the real byte size of the archive. If it is smaller, the
-# range was taken from a compressed copy and PMTiles will read garbage past the
-# first block. That is why this script compares against the local file size.
-#
-# Both weaker versions of this check gave a false pass on this project (see
-# PLAN.md section 8) — first a bare curl, then a status-plus-encoding check.
+# <total> must equal the real byte size of the archive. A smaller total means
+# the range came from a compressed copy. A weak `W/` etag says the same thing:
+# the representation has been transformed.
 
 set -eu
 
 BASE="${1:-https://networkfieldnotes.com/what-if-atlas}"
 BROWSER_AE='gzip, deflate, br, zstd'
+# The GitHub Pages origin, behind the custom domain. Checking both tells you
+# which layer is at fault instead of leaving you to guess.
+ORIGIN="${ORIGIN:-https://loopdetectedlolz.github.io/what-if-atlas}"
 fails=0
 
 say()  { printf '%s\n' "$*"; }
@@ -61,44 +68,65 @@ for f in manifest.webmanifest sw.js fonts.css data/neighbours.json \
 done
 
 # ── byte serving, the way a browser asks ────────────────────────────────────
+#
+# Reads at offset 0 and again deep inside the archive: PMTiles reads from
+# arbitrary offsets, and a host can get the first range right and later ones
+# wrong.
 say
 say "byte serving (browser-like Accept-Encoding):"
 for t in countries provinces urban; do
-  local_file="public/tiles/$t.pmtiles"
-  hdr=$(curl -sS -r 0-16383 -H "Accept-Encoding: $BROWSER_AE" -D - -o /dev/null \
-        "$BASE/tiles/$t.pmtiles" 2>/dev/null | tr -d '\r')
-
-  status=$(printf '%s\n' "$hdr" | awk '/^HTTP\/[0-9.]+ [0-9]{3}/ {s=$2} END {print s}')
-  enc=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-encoding:" {print $2}')
-  # content-range: bytes <start>-<end>/<total>
-  total=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-range:" {split($3, a, "/"); print a[2]}')
+  name="$t.pmtiles.gz"
+  local_file="public/tiles/$name"
   real=''
   [ -f "$local_file" ] && real=$(wc -c < "$local_file" | tr -d ' ')
 
-  if [ "$status" != 206 ]; then
-    bad "$t.pmtiles: status $status, expected 206 — the CDN ignored the range and sent the whole file"
-  elif [ -n "$enc" ]; then
-    bad "$t.pmtiles: 206 but content-encoding: $enc — a compressed range is not byte serving"
-  elif [ -z "$total" ]; then
-    bad "$t.pmtiles: 206 but no content-range header"
-  elif [ -z "$real" ]; then
-    ok "$t.pmtiles: 206, content-range total $total (no local copy to compare against)"
-  elif [ "$total" != "$real" ]; then
-    bad "$t.pmtiles: 206 but content-range total is $total and the file is $real — the range was sliced from a COMPRESSED copy, so PMTiles reads garbage"
-  else
-    ok "$t.pmtiles: 206, uncompressed, total $total matches the file"
-  fi
+  for range in 0-16383 1048576-1064959; do
+    hdr=$(curl -sS -r "$range" -H "Accept-Encoding: $BROWSER_AE" -D - -o "/dev/null" \
+          "$BASE/tiles/$name" 2>/dev/null | tr -d '\r')
+
+    status=$(printf '%s\n' "$hdr" | awk '/^HTTP\/[0-9.]+ [0-9]{3}/ {s=$2} END {print s}')
+    enc=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-encoding:" {print $2}')
+    etag=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "etag:" {print $2}')
+    # content-range: bytes <start>-<end>/<total>
+    total=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-range:" {split($3, a, "/"); print a[2]}')
+
+    if [ "$status" != 206 ]; then
+      bad "$name @$range: status $status, expected 206 — the host ignored the range"
+    elif [ -n "$enc" ]; then
+      bad "$name @$range: 206 but content-encoding: $enc — a compressed range is not byte serving"
+    elif [ -z "$total" ]; then
+      bad "$name @$range: 206 but no content-range header"
+    elif [ -n "$real" ] && [ "$total" != "$real" ]; then
+      bad "$name @$range: content-range total is $total, file is $real — the range was sliced from a COMPRESSED copy, so PMTiles reads garbage"
+    elif [ "${etag#W/}" != "$etag" ]; then
+      bad "$name @$range: weak etag $etag — the response was transformed in flight"
+    elif [ -z "$real" ]; then
+      ok "$name @$range: 206, total $total (no local copy to compare against)"
+    else
+      ok "$name @$range: 206, strong etag, total matches the file"
+    fi
+  done
 done
+
+# ── which layer is at fault, if any ─────────────────────────────────────────
+#
+# Informational. If the origin is broken too, no Cloudflare setting can fix it
+# and the fault is GitHub Pages' own CDN.
+if [ "$fails" -ne 0 ]; then
+  say
+  say "comparing against the GitHub Pages origin ($ORIGIN):"
+  o=$(curl -sS -L -r 0-16383 -H "Accept-Encoding: $BROWSER_AE" -D - -o /dev/null \
+      "$ORIGIN/tiles/countries.pmtiles.gz" 2>/dev/null | tr -d '\r' \
+      | awk 'tolower($1) == "content-range:" {split($3, a, "/"); print a[2]}' | tail -1)
+  say "  origin content-range total: ${o:-none}"
+  say "  If this is wrong too, the compression is GitHub Pages, not Cloudflare,"
+  say "  and no Cloudflare rule will fix it. See PLAN.md section 8."
+fi
 
 say
 if [ "$fails" -eq 0 ]; then
   say "all checks passed"
 else
   say "$fails check(s) failed"
-  say
-  say "If the byte-serving checks failed, the usual cause is CDN compression on"
-  say ".pmtiles. Fix in Cloudflare: Rules -> Compression Rules -> if URI Path"
-  say "starts with /what-if-atlas/tiles/ then compression off. Scope it to the"
-  say "path; do not disable Brotli/gzip for the whole site. See PLAN.md section 8."
   exit 1
 fi

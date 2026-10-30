@@ -8,8 +8,8 @@ Two rules this directory enforces:
 
 1. **Commit the DERIVED artefacts, not the sources.** The deploy workflow runs
    only `npm ci && npm run build` — it has no tippecanoe and cannot cut tiles —
-   so `public/tiles/*.pmtiles` and `public/data/*.json` are versioned and served
-   as-is. The ~81 MB of Natural Earth source GeoJSON is **not** versioned: it is
+   so `public/tiles/*.pmtiles.gz` and `public/data/*.json` are versioned and
+   served as-is. The ~81 MB of Natural Earth source GeoJSON is **not** versioned: it is
    reproducible from a pinned tag via `scripts/fetch-sources.sh`.
 
    Sources that *cannot* be re-fetched by a script are a different matter and do
@@ -40,9 +40,9 @@ have their own scripts.
 
 | Dataset | File | Source | Licence | Pulled | Built by |
 |---|---|---|---|---|---|
-| Countries (paintable) | `../public/tiles/countries.pmtiles` | `ne_10m_admin_0_countries_usa` @ v5.1.2 | **Public domain** | 2026-10-30 | `build-regions.mjs` → `build-tiles.sh` |
-| Provinces (paintable) | `../public/tiles/provinces.pmtiles` | `ne_10m_admin_1_states_provinces` | Public domain | 2026-10-30 | same |
-| Urban areas (paintable) | `../public/tiles/urban.pmtiles` | `ne_50m_urban_areas` + `ne_50m_populated_places` for names | Public domain | 2026-10-30 | same |
+| Countries (paintable) | `../public/tiles/countries.pmtiles.gz` | `ne_10m_admin_0_countries_usa` @ v5.1.2 | **Public domain** | 2026-10-30 | `build-regions.mjs` → `build-tiles.sh` |
+| Provinces (paintable) | `../public/tiles/provinces.pmtiles.gz` | `ne_10m_admin_1_states_provinces` | Public domain | 2026-10-30 | same |
+| Urban areas (paintable) | `../public/tiles/urban.pmtiles.gz` | `ne_50m_urban_areas` + `ne_50m_populated_places` for names | Public domain | 2026-10-30 | same |
 | Adjacency + continents | `../public/data/neighbours.json` | derived from the above | Public domain | 2026-10-30 | `build-neighbours.mjs` |
 | Placeholder basemap | `../public/data/placeholder-countries.geojson` | `ne_110m_admin_0_countries` | Public domain | 2026-10-30 | `build-placeholder.mjs` |
 | UI fonts | `../public/fonts/*.woff2` | Google Fonts | **SIL OFL 1.1** | 2026-10-30 | `fetch-fonts.sh` |
@@ -52,6 +52,25 @@ have their own scripts.
 > wrong point of view — the 110m file has no POV variant, so it uses Natural
 > Earth's de facto POV with Crimea drawn as Russian. The editor uses the
 > `_usa` POV tiles. Do not read anything into the placeholder's borders.
+
+### ⚠️ The tile archives are not gzipped, despite the `.gz`
+
+`public/tiles/*.pmtiles.gz` are plain, uncompressed PMTiles archives. **Do not
+gunzip them and do not "correct" the extension.**
+
+PMTiles reads an archive entirely through HTTP range requests. GitHub Pages
+gzips any response whose content type it does not recognise — `.pmtiles` is
+`application/octet-stream` — and then answers a range request by slicing the
+compressed copy, so PMTiles reads garbage and the map renders nothing while
+every other asset loads fine. `application/gzip` is a type Pages leaves alone.
+
+Measured, not guessed: `.png`, `.woff2`, `.mp4`, `.zip` and `.gz` all serve
+ranges correctly; `.pmtiles`, `.bin` and `.wasm` do not. `.gz` was chosen over
+`.png` because nothing in the chain ever transforms it, while a fake PNG would
+be silently rewritten if Cloudflare Polish were ever enabled. Full working in
+[`../PLAN.md`](../PLAN.md) §8.
+
+Verify after any deploy: `sh data/scripts/check-deploy.sh`.
 
 ### Tile flags that must not change
 
