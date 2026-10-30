@@ -1,0 +1,190 @@
+/* Editor layout.
+   Breakpoints, not orientation: iPadOS 26 can resize the window at any time,
+   and Apple's HIG says to lay out on size classes rather than device idiom. */
+
+#map { position: fixed; inset: 0; }
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  position: fixed;
+  z-index: 10;
+  top: max(var(--s3), env(safe-area-inset-top));
+  left: max(var(--s3), env(safe-area-inset-left));
+  width: 316px;
+  max-height: calc(100dvh - var(--s3) * 2);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--s3) var(--s4) var(--s4);
+  transition: transform 220ms var(--ease), opacity 220ms var(--ease);
+}
+
+.toolbar.hidden {
+  transform: translateX(calc(-100% - var(--s4)));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tb-row { margin-top: var(--s4); }
+.tb-row:first-child { margin-top: var(--s1); }
+
+.tb-tools, .tb-history, .tb-io { display: flex; gap: var(--s2); }
+.tb-tools > button, .tb-history > button, .tb-io > button { flex: 1 1 0; padding: 0 var(--s2); }
+
+.tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 56px;
+  font-size: 12px;
+}
+.tool .ico { font-size: 17px; line-height: 1; }
+.tool[aria-pressed="true"] {
+  background: var(--blue);
+  border-color: transparent;
+  color: #03202B;
+  font-weight: 600;
+}
+
+/* ── snap level ──────────────────────────────────────────────────────────── */
+
+.tb-level > .eyebrow { display: block; margin-bottom: var(--s2); }
+
+.level-pills { display: flex; gap: 4px; }
+.level-pills > .lvl {
+  flex: 1 1 0;
+  min-height: 38px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  border-radius: var(--r-pill);
+}
+.level-pills > .lvl[aria-pressed="true"] {
+  background: rgba(47, 168, 224, 0.26);
+  border-color: var(--blue);
+  color: var(--text);
+  font-weight: 600;
+}
+/* A level you cannot snap to at this zoom reads as unavailable, but stays
+   tappable — tapping it pins the level and zooms there. */
+.level-pills > .lvl[data-reachable="false"] { opacity: 0.4; }
+
+.level-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-top: var(--s2);
+}
+
+/* ── palette ─────────────────────────────────────────────────────────────── */
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+
+.swatch {
+  aspect-ratio: 1;
+  min-height: 0;          /* overrides the global 44px button floor */
+  padding: 0;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  position: relative;
+}
+/* The grid cells are below the 44px guideline on purpose — 24 swatches at 44px
+   would not fit an iPad's short edge. The whole grid is one target the thumb
+   lands in, and the selected swatch grows, so a mis-tap is visible and cheap to
+   correct. */
+.swatch[aria-pressed="true"] {
+  transform: scale(1.18);
+  border-color: #FFFFFF;
+  box-shadow: 0 0 0 2px var(--ink), 0 0 0 4px #FFFFFF;
+  z-index: 1;
+}
+
+.reset-swatch {
+  width: 100%;
+  margin-top: var(--s2);
+  min-height: 38px;
+  font-size: 12.5px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0A1721;
+  border-color: transparent;
+  font-weight: 600;
+}
+.reset-swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--ink), 0 0 0 4px var(--blue);
+}
+
+.tb-history > button, .tb-io > button { font-size: 13px; min-height: 40px; }
+
+/* ── readout ─────────────────────────────────────────────────────────────── */
+
+.readout {
+  position: fixed;
+  z-index: 10;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: max(var(--s4), calc(env(safe-area-inset-bottom) + var(--s3)));
+  padding: var(--s2) var(--s4);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  max-width: min(520px, calc(100vw - var(--s4) * 2));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms var(--ease);
+}
+.readout.on { opacity: 1; }
+.r-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.r-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+
+/* ── fold button ─────────────────────────────────────────────────────────── */
+
+.fold {
+  position: fixed;
+  z-index: 11;
+  top: max(var(--s3), env(safe-area-inset-top));
+  left: max(var(--s3), env(safe-area-inset-left));
+  width: 46px;
+  min-height: 46px;
+  padding: 0;
+  font-size: 18px;
+  border-radius: var(--r-pill);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease);
+}
+.fold.on { opacity: 1; pointer-events: auto; }
+
+/* ── narrow windows ──────────────────────────────────────────────────────── */
+
+@media (max-width: 560px) {
+  .toolbar {
+    width: auto;
+    right: max(var(--s3), env(safe-area-inset-right));
+    max-height: 52dvh;
+  }
+  .swatches { grid-template-columns: repeat(8, 1fr); }
+  .tool .lbl { display: none; }
+  .tool { min-height: 48px; }
+}
+
+/* While painting, the toolbar must not swallow a stroke that starts near it. */
+body.painting .toolbar { pointer-events: none; }
+body.painting .readout { opacity: 1; }
+
+.tool-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-top: var(--s2);
+}
+
+/* Four tools no longer fit side by side with labels at 316px. */
+.tb-tools { flex-wrap: wrap; }
+.tb-tools > button { flex: 1 1 calc(50% - var(--s2)); }

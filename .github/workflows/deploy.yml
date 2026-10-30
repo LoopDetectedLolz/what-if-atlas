@@ -1,0 +1,85 @@
+# Build and deploy the atlas to GitHub Pages.
+#
+# Serves at https://networkfieldnotes.com/what-if-atlas/ — a project page
+# inherits the user page's custom domain automatically, so this repo must have
+# NO CNAME file and NO custom domain set in its Pages settings. (Adding
+# networkfieldnotes.com here would fail anyway: GitHub enforces that a domain is
+# unique across all Pages sites, and LoopDetectedLolz.github.io already holds
+# it. That is the most likely way to take the blog offline.)
+#
+# Set Settings → Pages → Source to "GitHub Actions", not "Deploy from a branch".
+#
+# Action versions are the current majors as of 2026-10-30. GitHub's own starter
+# workflow is several majors behind on most of these — don't copy that one.
+
+name: Deploy atlas to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write # deploy-pages authenticates via OIDC
+
+# One deployment at a time. Queued runs are skipped, but a run already in
+# flight is allowed to finish rather than being cancelled mid-deploy.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Needed once any PMTiles archive is tracked with Git LFS: without
+          # this the deploy silently publishes a ~130-byte pointer file, which
+          # surfaces as a baffling PMTiles parse error in the browser.
+          lfs: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Type-checks and builds. `npm run build` runs tsc --noEmit first, so a
+      # type error fails the deploy rather than shipping.
+      - run: npm run build
+
+      - name: Check the published size against Pages' hard limits
+        run: |
+          # GitHub Pages: 1 GB per site, 100 MiB per file. Both are hard.
+          total_kb=$(du -sk dist | cut -f1)
+          echo "dist total: $((total_kb / 1024)) MiB"
+          if [ "$total_kb" -gt 1000000 ]; then
+            echo "::error::dist exceeds the 1 GB GitHub Pages site limit"
+            exit 1
+          fi
+          big=$(find dist -type f -size +100M)
+          if [ -n "$big" ]; then
+            echo "::error::file(s) over the 100 MiB Pages limit:"
+            echo "$big"
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

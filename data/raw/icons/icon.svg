@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#0E2A3C"/>
+      <stop offset="1" stop-color="#061019"/>
+    </linearGradient>
+    <clipPath id="globe"><circle cx="256" cy="256" r="168"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#sky)"/>
+  <circle cx="256" cy="256" r="168" fill="#CFE4F2"/>
+  <g clip-path="url(#globe)" fill="#FFFFFF">
+    <!-- Suggested landmasses, not a real projection: an icon, not a map. -->
+    <path d="M96 150 q60-34 118-10 q46 20 30 58 q-14 34-62 30 q-52-4-74-28 q-18-20-12-50Z"/>
+    <path d="M150 268 q44-16 72 10 q24 22 10 62 q-14 42-44 70 q-26 24-42 2 q-16-24-8-66 q6-42 12-78Z"/>
+    <path d="M286 142 q78-26 128 6 q36 24 14 56 q-24 34-82 34 q-56 0-76-32 q-16-28 16-64Z"/>
+    <path d="M300 258 q56-14 82 18 q22 28 2 70 q-20 42-56 44 q-32 2-40-36 q-8-42 12-96Z"/>
+    <path d="M404 352 q34-10 44 16 q8 24-14 40 q-22 16-38-4 q-14-20 8-52Z"/>
+  </g>
+  <g fill="none" stroke="#2FA8E0" stroke-width="7" opacity="0.85">
+    <circle cx="256" cy="256" r="168"/>
+    <!-- graticule -->
+    <path d="M256 88 v336"/>
+    <path d="M88 256 h336"/>
+    <ellipse cx="256" cy="256" rx="84" ry="168"/>
+    <path d="M100 186 h312 M100 326 h312" opacity="0.6"/>
+  </g>
+</svg>

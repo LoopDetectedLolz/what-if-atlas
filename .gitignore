@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+.DS_Store
+.vite/
+
+# Natural Earth sources: ~81 MB, reproducible from a pinned tag with
+# data/scripts/fetch-sources.sh, so not versioned. The DERIVED artefacts are
+# committed instead (public/tiles/*.pmtiles, public/data/*.json), because the
+# deploy workflow has no tippecanoe and cannot rebuild them.
+data/raw/*.geojson
+data/raw/*.zip
+
+# Intermediate normalised GeoJSON, between build-regions and build-tiles.
+data/out/
+
+# iCloud conflict copies
+* 2.*

@@ -1,0 +1,215 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   What-If Atlas — glass system.
+
+   Ported from networkfieldnotes.com (theme/style.css is the source of truth
+   there). Same tokens, same three glass levels, same single easing, same rule
+   that ONLY opacity and transform are animated.
+
+   Two deliberate differences from the blog, both forced by this app:
+
+   1. The map is LIGHT (white countries, soft blue ocean) while the blog's
+      chrome is dark. Near-white --text on 7%-white glass is illegible over a
+      white map, so panels use a dark-tinted glass here. The blog already set
+      this precedent with `body.acad` (orange ground, near-black glass), so
+      this is a theme variant of the existing system, not a second system.
+
+   2. backdrop-filter is kept OFF anything that overlaps the moving map.
+      WebKit's own guidance says it "forces the engine to perform more
+      rendering passes"; a MapLibre canvas repaints every frame during a
+      pinch, so an overlapping blurred panel re-blurs every frame by
+      construction. Blur is opt-in via .is-idle, which the app sets only when
+      the map is not moving. See PLAN.md §3.
+   ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Blog tokens, unchanged */
+  --ink: #061019;
+  --navy: #0E2A3C;
+  --blue: #2FA8E0;
+  --blue-light: #4FBDEA;
+  --teal: #5ED2DA;
+  --green: #8CE05E;
+  --orange: #F5A524;
+  --red: #F0705F;
+  --text: #EAF2F6;
+  --text-dim: #B0C4CF;
+  --text-muted: #8BA2AE;
+  --line: rgba(255, 255, 255, 0.10);
+
+  --r-pill: 999px;
+  --r-inner: 16px;
+  --r-chrome: 22px;
+  --r-card: 26px;
+  --r-hero: 32px;
+
+  --s1: 6px;
+  --s2: 10px;
+  --s3: 14px;
+  --s4: 20px;
+  --s5: 24px;
+  --s6: 28px;
+  --s7: 44px;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --sans: 'Instrument Sans', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+  /* Atlas-only: the map's own palette. Light, because the atlas is light. */
+  --ocean: #B9D7EB;
+  --land: #FFFFFF;
+  --border: #9FB4C2;
+  --coast: #6E8A9C;
+
+  /* Atlas-only: dark glass for panels floating over a light map. */
+  --glass-tint: rgba(8, 20, 30, 0.72);
+  --glass-tint-strong: rgba(6, 16, 25, 0.82);
+  --glass-line: rgba(255, 255, 255, 0.14);
+
+  /* Minimum touch target. Apple HIG. */
+  --touch: 44px;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* 100vh still misbehaves in iPad Safari; dvh tracks the visible viewport. */
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--ocean);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── glass: three levels, never nested ─────────────────────────────────── */
+
+.g-chrome, .g-card, .g-hero {
+  background: var(--glass-tint);
+  border: 1px solid var(--glass-line);
+  color: var(--text);
+}
+
+.g-chrome {
+  border-radius: var(--r-chrome);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20),
+              inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+              0 18px 44px -22px rgba(0, 0, 0, 0.55);
+}
+
+.g-card {
+  border-radius: var(--r-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18),
+              0 26px 54px -30px rgba(0, 0, 0, 0.55);
+}
+
+.g-hero {
+  background: var(--glass-tint-strong);
+  border-radius: var(--r-hero);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.22),
+              0 40px 80px -34px rgba(0, 0, 0, 0.6);
+}
+
+/* The cheap level: no blur, ever. Same role as .panel on the blog. */
+.panel {
+  background: var(--glass-tint);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-inner);
+}
+
+/* Blur is opt-in and only while the map is still. `.is-idle` is set by the app
+   on <body> when the map stops moving, and removed on movestart. A blurred
+   panel over a repainting WebGL canvas re-blurs every frame otherwise. */
+body.is-idle .g-chrome,
+body.is-idle .g-card,
+body.is-idle .g-hero {
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  background: rgba(8, 20, 30, 0.52);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  body.is-idle .g-chrome,
+  body.is-idle .g-card,
+  body.is-idle .g-hero {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--glass-tint-strong);
+  }
+}
+
+/* ── type ──────────────────────────────────────────────────────────────── */
+
+h1, h2, h3 {
+  margin: 0;
+  letter-spacing: -0.025em;
+  text-wrap: pretty;
+  font-weight: 700;
+}
+
+p { margin: 0; text-wrap: pretty; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+}
+
+.meta {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mono { font-family: var(--mono); }
+
+/* ── controls: 44px minimum, per Apple HIG ─────────────────────────────── */
+
+button {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  min-height: var(--touch);
+  padding: 0 var(--s4);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  /* Stop the double-tap-to-zoom delay and the grey tap flash on iOS. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 140ms var(--ease), transform 140ms var(--ease);
+}
+
+button:active { transform: scale(0.97); }
+button:disabled { opacity: 0.45; cursor: default; }
+
+button.primary {
+  background: var(--green);
+  border-color: transparent;
+  color: #07210A;
+  font-weight: 600;
+}
+
+/* Visible focus for keyboard and switch-control users. */
+:focus-visible {
+  outline: 2px solid var(--blue-light);
+  outline-offset: 2px;
+}
+
+/* ── reduced motion: the blog's rule, kept ─────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

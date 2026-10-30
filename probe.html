@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Pencil probe · What-If Atlas</title>
+<meta name="description" content="Milestone 0 device probe: Apple Pencil and touch event behaviour over a MapLibre canvas.">
+<link rel="stylesheet" href="fonts.css">
+<style>
+  /* Probe-only layout. The real app's layout lives in src/ui/layout.css. */
+  #map { position: fixed; inset: 0; }
+
+  /* The drawing surface. pointer-events:none so it never intercepts —
+     listeners live on the map's own canvas container. */
+  #ink {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    touch-action: none;
+  }
+
+  .readout {
+    position: fixed;
+    top: max(var(--s3), env(safe-area-inset-top));
+    left: max(var(--s3), env(safe-area-inset-left));
+    width: min(430px, calc(100vw - var(--s3) * 2));
+    max-height: calc(100dvh - var(--s3) * 2);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--s4);
+    z-index: 10;
+  }
+
+  .readout h1 { font-size: 19px; margin-bottom: 2px; }
+  .readout > .eyebrow { display: block; margin-bottom: var(--s3); }
+
+  /* Collapsed: just the title and the verdict, so there is map left to draw
+     on. The tests need a decent area under the Pencil. */
+  .readout.collapsed > section,
+  .readout.collapsed > .buttons,
+  .readout.collapsed > .hint { display: none; }
+  .readout.collapsed { width: min(330px, calc(100vw - var(--s3) * 2)); }
+
+  #fold {
+    position: absolute; top: var(--s3); right: var(--s3);
+    min-height: 34px; padding: 0 var(--s3); font-size: 12px;
+    font-family: var(--mono); border-radius: var(--r-pill);
+  }
+  .readout h1 { padding-right: 86px; }
+
+  section { margin-top: var(--s4); }
+  section > h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: var(--s2);
+  }
+
+  .row {
+    display: flex; justify-content: space-between; gap: var(--s3);
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row > .k { color: var(--text-dim); flex: 0 1 auto; }
+  .row > .v { font-family: var(--mono); font-size: 12.5px; text-align: right; flex: 0 0 auto; max-width: 58%; word-break: break-word; }
+
+  .yes { color: var(--green); }
+  .no  { color: var(--red); }
+  .unk { color: var(--text-muted); }
+
+  /* A guided test: instruction, then an auto-detected verdict. */
+  .test {
+    padding: var(--s3);
+    border: 1px solid var(--glass-line);
+    border-radius: var(--r-inner);
+    margin-bottom: var(--s2);
+    background: rgba(255,255,255,0.03);
+  }
+  .test[data-state="pass"] { border-color: rgba(140,224,94,0.5); background: rgba(140,224,94,0.07); }
+  .test[data-state="fail"] { border-color: rgba(240,112,95,0.5); background: rgba(240,112,95,0.07); }
+  .test[data-state="done"] { border-color: rgba(79,189,234,0.5); background: rgba(79,189,234,0.07); }
+
+  .test > .t-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s2); }
+  .test > .t-head > b { font-size: 14px; }
+  .test > .t-head > .badge {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.1em; padding: 3px 8px; border-radius: var(--r-pill);
+    background: rgba(255,255,255,0.09); color: var(--text-muted); white-space: nowrap;
+  }
+  .test[data-state="pass"] > .t-head > .badge { background: var(--green); color: #07210A; }
+  .test[data-state="fail"] > .t-head > .badge { background: var(--red); color: #2A0A06; }
+  .test[data-state="done"] > .t-head > .badge { background: var(--blue-light); color: #03202B; }
+  .test > .t-do { font-size: 13px; color: var(--text-dim); margin-top: 5px; line-height: 1.45; }
+  .test > .t-why { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+  .test > .t-result { font-family: var(--mono); font-size: 12px; margin-top: 7px; line-height: 1.5; white-space: pre-wrap; }
+
+  .buttons { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
+  .buttons > button { flex: 1 1 auto; font-size: 14px; padding: 0 var(--s3); }
+
+  #log {
+    font-family: var(--mono); font-size: 11px; line-height: 1.5;
+    max-height: 160px; overflow-y: auto;
+    background: rgba(0,0,0,0.3);
+    border-radius: var(--r-inner);
+    padding: var(--s2);
+    white-space: pre-wrap;
+    color: var(--text-dim);
+  }
+
+  .hint {
+    font-size: 12.5px; color: var(--orange); line-height: 1.5;
+    margin-top: var(--s2);
+  }
+</style>
+</head>
+<body>
+  <div id="map"></div>
+  <canvas id="ink"></canvas>
+
+  <div class="readout g-chrome" id="readout">
+    <button id="fold" type="button">hide</button>
+    <span class="eyebrow">What-If Atlas · milestone 0</span>
+    <h1>Pencil &amp; touch probe</h1>
+    <p class="meta" id="verdict-line">Waiting for input…</p>
+
+    <p class="hint" id="desktop-hint" hidden>
+      No touch events seen yet. This page has to run on the iPad in Safari to
+      mean anything — on a desktop browser it can only check that the drawing
+      code works with a mouse.
+    </p>
+
+    <section>
+      <h2>The question this page answers</h2>
+      <p style="font-size:13px;line-height:1.5;color:var(--text-dim)">
+        MapLibre listens to <span class="mono">touchstart</span>/<span class="mono">touchmove</span>,
+        never Pointer Events. So the plan is to gate panning by calling
+        <span class="mono">preventDefault()</span> on a stylus-only
+        <span class="mono">touchstart</span>, while drawing from
+        <span class="mono">pointermove</span>. No spec says whether WebKit keeps
+        delivering those pointer events afterwards. Test&nbsp;1 settles it.
+      </p>
+    </section>
+
+    <section>
+      <h2>Guided tests</h2>
+      <div id="tests"></div>
+    </section>
+
+    <section>
+      <h2>Pencil capabilities</h2>
+      <div id="caps"></div>
+    </section>
+
+    <section>
+      <h2>Device</h2>
+      <div id="device"></div>
+    </section>
+
+    <section>
+      <h2>Frame rate</h2>
+      <div id="fps"></div>
+      <div class="buttons">
+        <button id="fps-toggle">Start 10s measure</button>
+        <button id="hillshade-toggle">Hillshade on</button>
+      </div>
+      <p class="t-why" style="color:var(--text-muted);font-size:12px;margin-top:var(--s2)">
+        Run it, then pinch-zoom and pan continuously for the whole 10&nbsp;seconds.
+      </p>
+    </section>
+
+    <section>
+      <h2>Event log</h2>
+      <div id="log"></div>
+    </section>
+
+    <div class="buttons">
+      <button id="copy" class="primary">Copy report</button>
+      <button id="reset">Reset tests</button>
+      <button id="clear-ink">Clear ink</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/probe.ts"></script>
+</body>
+</html>

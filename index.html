@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<!-- Unlisted: the only noindex mechanism that works on GitHub Pages alone.
+     Covers this HTML only — the PMTiles and JSON need an X-Robots-Tag header,
+     which has to come from Cloudflare. See PLAN.md. -->
+<meta name="robots" content="noindex, nofollow">
+<title>What-If Atlas</title>
+<meta name="description" content="An interactive world atlas for learning geography and geopolitics.">
+<meta name="theme-color" content="#061019">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Atlas">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="stylesheet" href="fonts.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Toolbar. Laid out by width breakpoint, not orientation: iPadOS 26 can
+       resize the window at any time and Apple's HIG says to use size classes. -->
+  <div class="toolbar g-chrome" id="toolbar">
+    <div class="tb-row tb-tools">
+      <button class="tool" data-tool="brush" aria-pressed="true" title="Brush — sweep to colour regions">
+        <span class="ico">◍</span><span class="lbl">Brush</span>
+      </button>
+      <button class="tool" data-tool="fill" aria-pressed="false" title="Fill — flood across touching regions of the same colour">
+        <span class="ico">◆</span><span class="lbl">Fill</span>
+      </button>
+      <button class="tool" data-tool="hatch" aria-pressed="false" title="Occupied — hatch a region in the occupier's colour">
+        <span class="ico">▦</span><span class="lbl">Occupy</span>
+      </button>
+      <button class="tool" data-tool="eraser" aria-pressed="false" title="Eraser — back to white">
+        <span class="ico">○</span><span class="lbl">Erase</span>
+      </button>
+    </div>
+    <p class="tool-note" id="tool-note"></p>
+
+    <div class="tb-row tb-level">
+      <span class="eyebrow">Snapping to</span>
+      <div class="level-pills" id="level-pills">
+        <button class="lvl" data-level="auto" aria-pressed="true">Auto</button>
+        <button class="lvl" data-level="country" aria-pressed="false">Country</button>
+        <button class="lvl" data-level="province" aria-pressed="false">Province</button>
+        <button class="lvl" data-level="urban" aria-pressed="false">City</button>
+      </div>
+      <p class="level-note" id="level-note">Zoom in to paint smaller areas.</p>
+    </div>
+
+    <div class="tb-row">
+      <div class="swatches" id="swatches"></div>
+      <button class="reset-swatch" id="reset-swatch" title="Reset to white">Reset to white</button>
+    </div>
+
+    <div class="tb-row tb-history">
+      <button id="undo" disabled>Undo</button>
+      <button id="redo" disabled>Redo</button>
+      <button id="clear">Clear</button>
+    </div>
+
+    <div class="tb-row tb-io">
+      <button id="export">Export</button>
+      <button id="import">Import</button>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+    </div>
+
+    <div class="tb-row tb-io">
+      <button id="hill-btn" aria-pressed="false" title="Terrain shading, fading in as you zoom">Relief off</button>
+    </div>
+  </div>
+
+  <!-- What is under the pointer, and what a stroke would paint. -->
+  <div class="readout panel" id="readout">
+    <span class="r-name" id="r-name">—</span>
+    <span class="r-meta" id="r-meta"></span>
+  </div>
+
+  <button class="fold g-chrome" id="fold" title="Hide the toolbar">☰</button>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
