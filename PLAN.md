@@ -937,3 +937,61 @@ blocker for milestone 0; needed before milestone 1 deploys real data files.
 **Culturally sensitive framing** (milestone 6, so not urgent): Madjedbebe is on Mirarr
 country, and the framing of Australian and Aotearoa settlement is a judgement call I'd
 rather you made than defaulted.
+
+---
+
+## 8. Known deployment issue: Cloudflare compresses .pmtiles
+
+**Status: live site deploys, but the map does not render.** Diagnosed
+2026-10-30.
+
+Cloudflare returns `content-encoding: gzip` on byte-range responses for
+`.pmtiles`, and a compressed byte range is not byte serving. PMTiles then
+receives a `200` with the whole archive instead of a `206` with the requested
+slice, and throws:
+
+> Server returned no content-length header or content-length exceeding request.
+> Check that your storage backend supports HTTP Byte Serving.
+
+Evidence:
+
+```
+curl -r 0-1023 -H 'Accept-Encoding: gzip, br' .../tiles/countries.pmtiles
+  HTTP/2 206
+  server: cloudflare
+  content-encoding: gzip          <-- the problem
+  content-range: bytes 0-1023/3357828
+```
+
+In the browser the same request resolves to `status: 200`, `3,820,808 bytes`
+for a 16 KB range, with `content-range`, `content-length` and
+`content-encoding` all absent.
+
+It is Cloudflare, not GitHub Pages: `loopdetectedlolz.github.io/...` 301s to the
+custom domain, so every path reaches the origin through Cloudflare and every
+response carries `server: cloudflare`.
+
+⚠️ **A `curl` check gives a false pass.** curl sends no `Accept-Encoding` by
+default, so it gets an uncompressed, correct `206`. Any verification of byte
+serving must send a browser-like `Accept-Encoding: gzip, br`.
+
+### Fix (preferred): one Cloudflare rule
+
+Rules → **Compression Rules** → Create rule:
+
+- **If** URI Path starts with `/what-if-atlas/tiles/`
+- **Then** compression **off**
+
+Scoped to the path so the blog keeps compression everywhere else. Do not
+disable Brotli/gzip globally.
+
+### Fix (fallback, if the dashboard is unavailable)
+
+Implement a PMTiles `Source` that fetches each archive **whole** (one plain
+request, no Range header, so compression is harmless) and serves `getBytes` by
+slicing it locally, persisted in IndexedDB.
+
+This is already the milestone-E5 offline design, so it is not wasted work — but
+it moves 38.9 MB onto first load, which is a poor opening experience on school
+wifi. Best shape is a hybrid: attempt ranges, detect the `200`-with-full-body
+signature, and fall back automatically, so the app works either way.
