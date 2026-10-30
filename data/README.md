@@ -81,6 +81,15 @@ feature cannot be coloured independently and a dropped one disappears from the
 map. Size is controlled by simplification alone, and every feature survives:
 254 / 4,596 / 2,143 in, the same out.
 
+### The `+00?` province ids are upstream's, not corruption
+
+Three provinces carry ids like `JEY+00?`, `MCO+00?` and `IMN+00?` — Jersey,
+Monaco and the Isle of Man. That `+00?` is Natural Earth's own literal
+`adm1_code` for crown dependencies and microstates that have no real admin-1
+subdivision, not a build bug. They stay unique because the ADM0 prefix differs,
+so painting keys on them correctly. Do not "clean" them: the id is the paint
+key, and rewriting it would orphan any saved scenario that used it.
+
 ### Why `ADM0_A3` and not `ISO_A3`
 
 `ADM0_A3` is the only country field in Natural Earth that is both unique and

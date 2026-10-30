@@ -1043,6 +1043,24 @@ can stay or go.
 **The lesson worth keeping:** when a CDN is in the path, test the origin before
 blaming the CDN. One request would have saved the whole detour.
 
+### Verified live, 2026-10-30
+
+On `https://networkfieldnotes.com/what-if-atlas/`, after clearing the service
+worker and caches:
+
+- all three sources `loaded=true`, with the right zoom ranges (0–7, 2–9, 4–12)
+- 88 countries rendered at z3.4 with correct `ADM0_A3` ids and names
+- tapping painted FRA, DEU, ITA and TUR — `feature-state.color = #5E9E4B` on each
+- at z6 over France, 175 départements rendered with correct parent countries,
+  so the 24 MB provinces archive reads correctly over ranges
+- renders correctly at iPad portrait (768×1024) and landscape (1024×768)
+
+⚠️ **Frame rate is still unmeasured.** `requestAnimationFrame` is throttled to
+~1–2 Hz in the automated browser pane whether it is shown or hidden — the idle
+baseline measures 2 fps with no map work at all, so every number from it is an
+artifact of the harness, not the map. The frame-rate half of the milestone gate
+has to be run on the iPad, alongside `probe.html`.
+
 ### Still to do: the offline story needs the whole-file source anyway
 
 This fix restores lazy range loading, which is the right runtime behaviour. But
