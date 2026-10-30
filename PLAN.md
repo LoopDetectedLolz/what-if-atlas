@@ -1204,6 +1204,19 @@ Symbol layers are the most expensive thing on this map and this is the first
 time the atlas has had any — the iPad run that still owes us `probe.html` owes
 us this too.
 
+### A trap when verifying from an automated browser
+
+`Style.loadJSON` defers `_load` to an animation frame. A browser pane that is
+hidden or unpainted delivers no frames, so **the style never starts loading at
+all**: `getStyle()` stays undefined, `isStyleLoaded()` stays false, no source
+cache is ever created, and it looks exactly like a failed fetch — with an empty
+console and every network request sitting at 200.
+
+It is not stuck. Forcing one frame, by taking a screenshot, finishes the load
+immediately. Check that before debugging a deploy that appears not to load; this
+has now looked like a real fault twice. The same throttling is why no frame-rate
+number from that pane means anything (§8).
+
 ### A regression this turned up: the dev server and the `.gz` that is not gzipped
 
 The `*.pmtiles.gz` rename in §8 fixed GitHub Pages and **broke `npm run dev`**.
