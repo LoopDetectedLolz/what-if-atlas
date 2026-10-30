@@ -62,6 +62,8 @@ fi
 
 # ── static assets ───────────────────────────────────────────────────────────
 for f in manifest.webmanifest sw.js fonts.css data/neighbours.json \
+         data/labels.json fonts/instrument-sans-latin.woff2 \
+         fonts/instrument-sans-latin-ext.woff2 fonts/noto-sans-vietnamese.woff2 \
          icons/icon-192.png icons/icon-512.png probe.html; do
   code=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/$f")
   [ "$code" = 200 ] && ok "$f" || bad "$f returned $code"

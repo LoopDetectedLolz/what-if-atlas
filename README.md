@@ -23,6 +23,12 @@ npm run dev
 Then open <http://localhost:5173/what-if-atlas/> — note the subpath, which
 matches the deployed base.
 
+⚠️ `vite.config.ts` serves `tiles/*.pmtiles.gz` through a small handler of its
+own. Those files are **not** gzipped despite the name (see below), and Vite's
+static server would otherwise answer with `Content-Encoding: gzip` and the
+browser would fail to inflate them. Deleting that handler breaks the map
+locally while leaving the deployed site working.
+
 To try it on the iPad over the same wifi, the dev server already binds all
 interfaces: open `http://<your-mac-lan-ip>:5173/what-if-atlas/`.
 
@@ -35,7 +41,7 @@ npm run preview    # serves dist/ at http://localhost:4173/what-if-atlas/
 
 | Path | What |
 |---|---|
-| `src/map/` | Map construction, the atlas style, and the worker fix |
+| `src/map/` | Map construction, the atlas style, the label layers, and the worker fix |
 | `src/dev/fps.ts` | Frame-rate probe — the milestone sign-off gate |
 | `src/ui/glass.css` | The glass system, ported from networkfieldnotes.com |
 | `probe.html` | **Milestone-0 device probe** — see below |
@@ -52,6 +58,19 @@ It has to run on the real iPad to mean anything. It is readable and reportable
 on-device because there is no usable console there: four guided tests with
 auto-detected verdicts, the Pencil's actual capabilities, and a **Copy report**
 button.
+
+## Labels
+
+The map draws its own place names with **no glyph pipeline, no font server and
+no API key**: MapLibre v6 takes the self-hosted `public/fonts/*.woff2` directly
+through the style's `font-faces` property and rasterizes glyphs in the browser.
+Anchors come from `public/data/labels.json`, built from Natural Earth's own
+cartographer-chosen label coordinates, and the reveal schedule is NE's label
+rank rather than hand-tuned zoom cutoffs. **Names on/off** is in the toolbar.
+
+PLAN.md §9 has the full reasoning, including why labels are a separate point
+dataset rather than symbols on the paintable polygon layers, and why Noto Sans
+is self-hosted for one Unicode block.
 
 ## Deploying
 

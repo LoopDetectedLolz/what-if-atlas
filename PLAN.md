@@ -516,12 +516,6 @@ PMTiles serve over HTTP Range requests (`206 Partial Content` confirmed).
 
 ### Not built yet
 
-**Labels** — MapLibre cannot draw text without PBF glyph ranges, which with no
-API key means generating our own at build time from the self-hosted fonts.
-Region names currently appear in the toolbar readout instead. This is the
-biggest remaining gap in usability: painting provinces without names is harder
-than it should be.
-
 **The shared-border fade** — the adjacency table it needs is now built.
 
 **Free-hand pen clipped within a region**, for shapes that are not whole
@@ -823,12 +817,13 @@ would otherwise build itself.
   type error. Only `Touch.touchType` genuinely needs declaring. Being typed is
   not being implemented, so all four are still probed at runtime.
 
-**Labels need a glyph pipeline, and it is not free.** MapLibre cannot render any
-text without PBF glyph ranges, and with no API key the only route is generating
-our own at build time from the self-hosted woff2 (`fontnik` /
-`@maplibre/font-maker`). Milestone 0 therefore ships **no labels at all**, which
-is also the honest baseline for the frame-rate probe. **This is new scope for
-milestone 1** and was not in the original plan.
+**Labels were thought to need a glyph pipeline. They do not** — see §9, which
+corrects this. Milestone 0 shipped **no labels at all**, which is also the
+honest baseline for the frame-rate probe, and the reason recorded here at the
+time was that MapLibre cannot render text without PBF glyph ranges, so with no
+API key the only route was generating our own at build time from the
+self-hosted woff2 (`fontnik` / `@maplibre/font-maker`). That was true of
+MapLibre v4. It is not true of the v6 this project pins.
 
 **`ADM0_A3` verified on real data.** Unique 177/177 in the 110m file, while
 `ISO_A3` already carries 5 `-99` values at that scale. The key choice holds.
@@ -854,7 +849,7 @@ legibility gain, but the original was never broken.
 | **0** | Spike + skeleton. Vite, MapLibre v6, subpath deploy, glass theme, self-hosted fonts, Pencil probe, FPS harness. | **Built.** Pencil probe still needs a run on the real iPad. |
 | **E1** | Region tiles, snap levels, layered painting, sweep brush, fill, undo/redo, palette, export/import. | **Built and verified.** |
 | **E2** | Grid-anchored occupation hatching. | **Built and verified** — via a tile-anchored fill-pattern, not clipped geometry; see §3a for why. |
-| **E3** | Labels (the glyph pipeline) — the biggest remaining usability gap. Then the shared-border fade, and bookmarks with thumbnails. | Next. |
+| **E3** | Labels, then the shared-border fade, and bookmarks with thumbnails. | **Labels built and verified** — and with no glyph pipeline at all; see §9. Fade and bookmarks next. |
 | **E4** | Free-hand pen clipped within a single region, for shapes that are not whole regions. Eraser for strokes. | |
 | **E5** | Offline/PWA, iPad polish, performance pass. | |
 
@@ -1075,3 +1070,148 @@ zoom 4.5 pulls provinces and nothing pulls the 38.9 MB up front.
 Once that lands, the `.gz` extension stops being load-bearing. It should stay
 anyway: the range path remains the fast path on first visit.
 
+
+---
+
+## 9. Labels — and the glyph pipeline that turned out to be unnecessary
+
+Two sections above said labels would need a build-time glyph pipeline, and
+budgeted new scope for it. They were wrong, and this records why, so nobody
+rebuilds the thing we did not need.
+
+### What the old reasoning got right, and where it expired
+
+MapLibre genuinely cannot draw text from a `.woff2` the way a web page can. It
+renders signed-distance-field glyphs out of a texture atlas, and historically
+the only source for those was a `glyphs` URL serving PBF ranges of 256
+codepoints — which means a font server, or generating the ranges at build time
+with `fontnik`. That is what §5a planned for.
+
+**MapLibre v6 added a second route, and this project already pinned v6.** The
+style specification now has a root `font-faces` property: a map from the name a
+symbol layer asks for in `text-font` to the actual font FILES to draw it with.
+MapLibre downloads each file, registers it with the browser's CSS Font Loading
+API under a private family name, and rasterizes each glyph on demand with
+TinySDF — the same code path that has drawn CJK locally for years, now reachable
+for any script. Read it in `src/render/font_face_manager.ts` and
+`src/render/glyph_manager.ts` of the installed package; the style-spec
+`sdk-support` block still points at an open issue, but the implementation ships.
+
+So the atlas has **no `glyphs` URL, no PBF ranges, no font server and no new
+build step**. The style points at `public/fonts/*.woff2` — the same files the UI
+has been using since milestone 0.
+
+What this costs, honestly: glyphs are rasterized on the device instead of
+arriving pre-baked, so the first frame with a new character does a little work
+on the main thread. For a Latin-only label set that is a few hundred glyphs,
+once, cached for the session.
+
+### One weight, because a font file has no weight descriptor
+
+MapLibre constructs each face as `new FontFace(family, data)` with no `weight`
+descriptor, so a variable font renders at its default instance — 400. There is
+no way to ask the style for a semibold. Hierarchy therefore comes from case,
+tracking, size and colour: countries in letter-spaced capitals, provinces and
+cities in sentence case, all with a white halo wide enough to stay readable over
+any of the 24 paint colours.
+
+### Instrument Sans cannot spell Vietnamese
+
+Google serves Instrument Sans in `latin` and `latin-ext` only — the typeface has
+no Vietnamese coverage. Fifteen characters of Natural Earth's admin-1 names live
+in U+1EA0-1EF9 and in no other subset: Đắk Nông, Quảng Trị, Thừa Thiên - Huế.
+Checked against all 5,500 region names, those are the **only** characters the two
+Latin subsets miss, so Cyrillic, Greek and CJK stay correctly out of the bundle.
+
+The fix is a third self-hosted file: Noto Sans, narrowed to exactly that block,
+declared after Instrument Sans so it can never claim a character Instrument Sans
+has. A Vietnamese name renders its base letters in Instrument Sans and its
+accented ones in Noto — indistinguishable at label size, and identical on every
+device, which a system fallback would not be.
+
+⚠️ The `unicode-range` values are **generated**, not hand-written, into
+`src/map/fonts.generated.ts` by `data/scripts/fetch-fonts.sh`. Google's split is
+not the obvious one — `latin` stops at U+00FF and `latin-ext` owns U+0100-02BA —
+and MapLibre takes the first declared face whose range covers a codepoint. A
+widened range hands characters to a file that does not contain them, and they
+come back from the system font.
+
+### Label anchors are their own dataset
+
+`public/data/labels.json` — 6,092 points, 1.0 MB raw and 134 KB over the wire —
+built by `data/scripts/build-labels.mjs`. Labels are **not** drawn off the
+paintable polygon layers, for two reasons:
+
+1. **MapLibre labels a polygon once per TILE.** A country spanning several tiles
+   gets several labels — "Russia" repeated across Siberia — and nothing dedupes
+   them, because the copies do not overlap so the collision index never fires.
+2. **Natural Earth already carries cartographer-chosen label points**, and they
+   beat any centroid: `LABEL_X`/`LABEL_Y` on admin-0 (present on all 252),
+   `latitude`/`longitude` on admin-1 (all 4,589). A bounding-box centre puts
+   Chile's label in the Pacific.
+
+City labels come from `ne_50m_populated_places` (1,251 points), not the
+urban-area polygons, which have no names at all. 586 of those places have no
+urban polygon around them, so the map names Reykjavík even where there is no
+city-level region to paint; `urban_id` ties the rest back to their polygon.
+
+### The reveal schedule is Natural Earth's, not invented
+
+Every anchor carries NE's own label priority — `LABELRANK` for countries,
+`min_label` for provinces, `SCALERANK` for places — and it does two jobs:
+
+- **`symbol-sort-key`**, so MapLibre places labels in that order and the ones
+  that will not fit lose the collision. That is the progressive zoom reveal,
+  straight from the data, with one layer per level instead of hand-tuned zoom
+  cutoffs. It also has the nicer property that a minor name sitting in empty
+  space appears early, because there is nothing to collide with.
+- **`text-size`**, interpolated on rank inside the stops of the zoom
+  interpolation. Without this the hierarchy is invisible: Vatican City and
+  Andorra sit in open space, win their collisions outright and draw at exactly
+  the size Poland does.
+
+⚠️ A rank-driven size has to go **inside** the `['zoom']` interpolation's stops.
+A zoom expression must be the outermost expression of a property, so multiplying
+one by a per-feature factor is rejected.
+
+### Layer order is the collision priority, and it is back to front
+
+MapLibre places symbols starting from the **top** layer — `PauseablePlacement`
+walks the layer order in reverse — so a later layer wins the space. The label
+layers are therefore declared province → place dots → places → **countries
+last**: in a crowded view of Europe, "Belgium" should survive and "Charleroi"
+should be the one to go.
+
+### Turning names off is a layout property, never a restyle
+
+`setStyle` discards every feature-state, so rebuilding the style to hide some
+text would throw away the whole painting. The toggle sets `visibility` on the
+four layers. The flag is still passed to `atlasStyle`, so that a style
+replacement — the relief toggle — comes back in the state the user left it.
+
+### Verified, 2026-10-30
+
+On the dev server at z3.4 through z8.6: 44 country and 71 place labels at the
+world view with the rank-driven sizes visibly separating Poland from Andorra;
+French départements at z6 with Paris's capital dot; London boroughs at z8.6;
+Vietnamese province names rendering with every diacritic; names legible in white
+halo over the darkest navy in the palette; the toggle surviving a relief
+restyle; iPad portrait (768×1024) and landscape (1024×768) both clean.
+
+**Not verified: frame rate with labels on.** The browser pane throttles
+`requestAnimationFrame` to ~2 fps at idle, so no number from it means anything.
+Symbol layers are the most expensive thing on this map and this is the first
+time the atlas has had any — the iPad run that still owes us `probe.html` owes
+us this too.
+
+### A regression this turned up: the dev server and the `.gz` that is not gzipped
+
+The `*.pmtiles.gz` rename in §8 fixed GitHub Pages and **broke `npm run dev`**.
+The static server Vite uses takes the extension at its word and answers with
+`Content-Encoding: gzip`, so the browser tries to inflate plain bytes and fails
+with `ERR_CONTENT_DECODING_FAILED` — the map renders nothing locally while the
+deployed site is fine, the exact inverse of the bug the rename cured.
+
+`vite.config.ts` now serves those files itself, with range support and no
+content encoding, for both `dev` and `preview`. Worth noticing that §8's own
+verification could not have caught this: it only ever tested the deployed site.

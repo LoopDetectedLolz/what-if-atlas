@@ -30,11 +30,12 @@ Two rules this directory enforces:
 sh   data/scripts/fetch-sources.sh      # ~81 MB from the pinned v5.1.2 tag
 node data/scripts/build-regions.mjs     # normalise, assign stable ids
 node data/scripts/build-neighbours.mjs  # adjacency + continent table
+node data/scripts/build-labels.mjs      # label anchors for the map's place names
 sh   data/scripts/build-tiles.sh        # PMTiles (needs: brew install tippecanoe)
 ```
 
-Only the last two steps' outputs are committed. Fonts and icons change rarely and
-have their own scripts.
+Only the last three steps' outputs are committed. Fonts and icons change rarely
+and have their own scripts.
 
 ## Current contents
 
@@ -44,8 +45,9 @@ have their own scripts.
 | Provinces (paintable) | `../public/tiles/provinces.pmtiles.gz` | `ne_10m_admin_1_states_provinces` | Public domain | 2026-10-30 | same |
 | Urban areas (paintable) | `../public/tiles/urban.pmtiles.gz` | `ne_50m_urban_areas` + `ne_50m_populated_places` for names | Public domain | 2026-10-30 | same |
 | Adjacency + continents | `../public/data/neighbours.json` | derived from the above | Public domain | 2026-10-30 | `build-neighbours.mjs` |
+| Label anchors | `../public/data/labels.json` | `LABEL_X`/`LABEL_Y` on admin-0, `latitude`/`longitude` on admin-1, `ne_50m_populated_places` | Public domain | 2026-10-30 | `build-labels.mjs` |
 | Placeholder basemap | `../public/data/placeholder-countries.geojson` | `ne_110m_admin_0_countries` | Public domain | 2026-10-30 | `build-placeholder.mjs` |
-| UI fonts | `../public/fonts/*.woff2` | Google Fonts | **SIL OFL 1.1** | 2026-10-30 | `fetch-fonts.sh` |
+| Fonts (UI **and** map labels) | `../public/fonts/*.woff2` | Google Fonts — Instrument Sans, JetBrains Mono, Noto Sans | **SIL OFL 1.1** | 2026-10-30 | `fetch-fonts.sh` |
 | App icons | `../public/icons/*.png` | drawn here | — | 2026-10-30 | `build-icons.sh` |
 
 > ⚠️ **The placeholder basemap is only used by `probe.html`** and carries the
@@ -71,6 +73,39 @@ be silently rewritten if Cloudflare Polish were ever enabled. Full working in
 [`../PLAN.md`](../PLAN.md) §8.
 
 Verify after any deploy: `sh data/scripts/check-deploy.sh`.
+
+### Labels are a separate dataset, on purpose
+
+`public/data/labels.json` is 6,092 points — one per country, province and
+populated place — carrying **Natural Earth's own label coordinates**, not
+centroids computed here. Two reasons, both visible on screen if ignored:
+
+1. MapLibre labels a polygon once **per tile**, so a country spanning several
+   tiles would be named several times over, and nothing dedupes it.
+2. `LABEL_X`/`LABEL_Y` and admin-1's `latitude`/`longitude` are
+   cartographer-placed. A bounding-box centre puts Chile's label in the Pacific.
+
+Each point also carries NE's own label priority as `rank` — `LABELRANK`,
+`min_label`, `SCALERANK` by level, lower being more important — which drives
+both the placement order and the text size. The reveal schedule is therefore
+Natural Earth's judgement, not a hand-tuned table. Full reasoning in
+[`../PLAN.md`](../PLAN.md) §9.
+
+### ⚠️ The fonts draw the map, not just the UI
+
+MapLibre v6 rasterizes map labels from the `public/fonts/*.woff2` files directly
+through the style's `font-faces` property, so there is no glyph-PBF pipeline and
+no font server. That makes the subset list load-bearing: a name whose characters
+no subset covers falls back to whatever sans-serif the device has.
+
+**Instrument Sans has no Vietnamese** — Google serves it `latin` and `latin-ext`
+only. Natural Earth's Vietnamese province names need U+1EA0-1EF9, so Noto Sans
+is self-hosted narrowed to exactly that block. Those 15 characters are the only
+ones the two Latin subsets miss across all 5,500 region names.
+
+`fetch-fonts.sh` writes the ranges into `src/map/fonts.generated.ts`. Do not
+hand-edit them: Google's split is not the obvious one and a widened range hands
+characters to a file that does not contain them.
 
 ### Tile flags that must not change
 
@@ -181,8 +216,9 @@ Full reasoning in [`../PLAN.md`](../PLAN.md) §4.
 | `scripts/fetch-sources.sh` | Downloads the Natural Earth layers at the pinned tag into `data/raw/`. Idempotent. |
 | `scripts/build-regions.mjs` | Normalises the three paintable levels and assigns stable ids. |
 | `scripts/build-neighbours.mjs` | Builds the adjacency table from shared vertices, plus the continent lookup. Self-checking. |
+| `scripts/build-labels.mjs` | Builds the map's label anchors from Natural Earth's own label coordinates. |
 | `scripts/build-tiles.sh` | Cuts the PMTiles archives (needs `brew install tippecanoe`). |
-| `scripts/fetch-fonts.sh` | Re-downloads the self-hosted UI fonts and regenerates `public/fonts.css`. |
+| `scripts/fetch-fonts.sh` | Re-downloads the self-hosted fonts, regenerating `public/fonts.css` **and** `src/map/fonts.generated.ts`, which the map's `font-faces` are built from. |
 | `scripts/build-placeholder.mjs` | Builds the probe page's placeholder basemap from Natural Earth 110m. |
 | `scripts/build-icons.sh` | Renders the PWA icons from SVG (needs `brew install librsvg`). |
 | `scripts/check-deploy.sh` | Smoke-tests the **deployed** site, including byte serving the way a browser asks for it. Run after any deploy or CDN change. |

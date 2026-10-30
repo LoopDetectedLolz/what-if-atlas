@@ -18,7 +18,7 @@ import * as maplibregl from 'maplibre-gl';
 
 import './ui/glass.css';
 import './ui/layout.css';
-import { atlasStyle } from './map/style';
+import { atlasStyle, setLabelsVisible } from './map/style';
 import { LEVEL_DEFS, LEVELS, autoLevel, type Level } from './map/regions';
 import { ScenarioStore, emptyScenario, migrate, serialise } from './state/scenario';
 import { PaintController, PaintRenderer, type NeighbourTable, type Tool } from './tools/paint';
@@ -41,6 +41,7 @@ let tool: Tool = 'brush';
 /** null = follow the zoom. */
 let pinnedLevel: Level | null = null;
 let hillshadeOn = false;
+let labelsOn = true;
 
 const el = <T extends HTMLElement = HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -53,7 +54,7 @@ let map: MlMap;
 try {
   map = new MlMap({
     container: 'map',
-    style: atlasStyle({ base: BASE, hillshade: hillshadeOn }),
+    style: atlasStyle({ base: BASE, hillshade: hillshadeOn, labels: labelsOn }),
     center: [10, 42],
     zoom: 3.4,
     attributionControl: { compact: true },
@@ -92,7 +93,7 @@ map.on('idle', () => document.body.classList.add('is-idle'));
  * new style — once, after it has loaded.
  */
 function reloadStyle(): void {
-  map.setStyle(atlasStyle({ base: BASE, hillshade: hillshadeOn }));
+  map.setStyle(atlasStyle({ base: BASE, hillshade: hillshadeOn, labels: labelsOn }));
   map.once('styledata', () => {
     resetHatchImages();
     ensureHatchNone(map);
@@ -356,6 +357,17 @@ el('import-file').addEventListener('change', async (ev) => {
     alert('That file could not be read as a scenario.');
   }
   (ev.target as HTMLInputElement).value = '';
+});
+
+// Names are a layout property, not a style rebuild: setStyle would discard
+// every feature-state and the whole painting would have to be re-applied just
+// to hide some text.
+el('label-btn').addEventListener('click', (ev) => {
+  const btn = ev.currentTarget as HTMLButtonElement;
+  labelsOn = !labelsOn;
+  btn.textContent = labelsOn ? 'Names on' : 'Names off';
+  btn.setAttribute('aria-pressed', String(labelsOn));
+  setLabelsVisible(map, labelsOn);
 });
 
 el('hill-btn').addEventListener('click', (ev) => {
