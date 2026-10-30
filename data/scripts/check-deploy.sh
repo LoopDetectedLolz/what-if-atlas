@@ -15,11 +15,20 @@
 # throws "Server returned no content-length header...", and the map renders
 # nothing at all while the rest of the page looks perfectly healthy.
 #
-# So every range check below sends browser-like Accept-Encoding and asserts
-# BOTH that the status is 206 AND that content-encoding is absent.
+# Checking the status and the absence of content-encoding is NOT ENOUGH either.
+# Cloudflare can serve a range sliced out of a COMPRESSED representation while
+# omitting content-encoding from the 206. It looks perfect and is still broken.
 #
-# This exact failure shipped once (see PLAN.md section 8): Cloudflare gzipped
-# .pmtiles, and a curl check reported it as verified.
+# The check that cannot be fooled is the total in the content-range header:
+#
+#     content-range: bytes 0-16383/<total>
+#
+# <total> must equal the real byte size of the archive. If it is smaller, the
+# range was taken from a compressed copy and PMTiles will read garbage past the
+# first block. That is why this script compares against the local file size.
+#
+# Both weaker versions of this check gave a false pass on this project (see
+# PLAN.md section 8) — first a bare curl, then a status-plus-encoding check.
 
 set -eu
 
@@ -55,21 +64,29 @@ done
 say
 say "byte serving (browser-like Accept-Encoding):"
 for t in countries provinces urban; do
+  local_file="public/tiles/$t.pmtiles"
   hdr=$(curl -sS -r 0-16383 -H "Accept-Encoding: $BROWSER_AE" -D - -o /dev/null \
         "$BASE/tiles/$t.pmtiles" 2>/dev/null | tr -d '\r')
 
   status=$(printf '%s\n' "$hdr" | awk '/^HTTP\/[0-9.]+ [0-9]{3}/ {s=$2} END {print s}')
   enc=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-encoding:" {print $2}')
-  range=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-range:" {print $2, $3}')
+  # content-range: bytes <start>-<end>/<total>
+  total=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-range:" {split($3, a, "/"); print a[2]}')
+  real=''
+  [ -f "$local_file" ] && real=$(wc -c < "$local_file" | tr -d ' ')
 
   if [ "$status" != 206 ]; then
     bad "$t.pmtiles: status $status, expected 206 — the CDN ignored the range and sent the whole file"
   elif [ -n "$enc" ]; then
     bad "$t.pmtiles: 206 but content-encoding: $enc — a compressed range is not byte serving"
-  elif [ -z "$range" ]; then
+  elif [ -z "$total" ]; then
     bad "$t.pmtiles: 206 but no content-range header"
+  elif [ -z "$real" ]; then
+    ok "$t.pmtiles: 206, content-range total $total (no local copy to compare against)"
+  elif [ "$total" != "$real" ]; then
+    bad "$t.pmtiles: 206 but content-range total is $total and the file is $real — the range was sliced from a COMPRESSED copy, so PMTiles reads garbage"
   else
-    ok "$t.pmtiles: 206, uncompressed, content-range $range"
+    ok "$t.pmtiles: 206, uncompressed, total $total matches the file"
   fi
 done
 

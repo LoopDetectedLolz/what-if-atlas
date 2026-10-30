@@ -971,9 +971,28 @@ It is Cloudflare, not GitHub Pages: `loopdetectedlolz.github.io/...` 301s to the
 custom domain, so every path reaches the origin through Cloudflare and every
 response carries `server: cloudflare`.
 
-⚠️ **A `curl` check gives a false pass.** curl sends no `Accept-Encoding` by
-default, so it gets an uncompressed, correct `206`. Any verification of byte
-serving must send a browser-like `Accept-Encoding: gzip, br`.
+⚠️ **Two weaker checks both gave a false pass here. Use the content-range total.**
+
+1. A bare `curl -r 0-1023` passes, because curl sends no `Accept-Encoding` by
+   default and so gets an uncompressed, correct `206`.
+2. Sending browser-like `Accept-Encoding` and asserting `206` + no
+   `content-encoding` ALSO passes, because Cloudflare will happily serve a range
+   sliced out of a compressed representation while omitting `content-encoding`
+   from the `206`.
+
+The check that cannot be fooled is the total in `content-range: bytes a-b/TOTAL`:
+**TOTAL must equal the real byte size of the archive.** When it is smaller, the
+range came from a compressed copy and PMTiles reads garbage past the first
+block. Observed while the fault was live:
+
+| archive | content-range total | real size |
+|---|---|---|
+| countries.pmtiles | 3,357,828 | 3,820,808 |
+| provinces.pmtiles | 19,325,567 | 24,188,387 |
+| urban.pmtiles | 4,288,441 | 12,771,423 |
+
+`data/scripts/check-deploy.sh` compares against the local file size for exactly
+this reason.
 
 ### Fix (preferred): one Cloudflare rule
 
