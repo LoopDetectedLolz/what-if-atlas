@@ -1994,6 +1994,14 @@ path it would never take in production. Hence
 serves `dist/` with the headers measured from the live site, answers `304` to a
 conditional GET, and supports Range so the tiles still stream.
 
+Its `max-age` split is by extension, not directory — Cloudflare's default
+cacheable-extension list, so `assets/main-<hash>.js` gets 14400 while
+`assets/maplibre-gl-worker-<hash>.mjs` beside it gets 600. The first version of
+the fixture guessed 600 for everything under `assets/`; the live cache after
+this deploy said otherwise. It changes nothing for the worker, which takes
+`assets/*` cache-first and never reads their max-age — but a fixture that
+misreports production is how this whole class of bug starts.
+
 ### Measured, on the real Cache API
 
 Old worker, server changed underneath it: the client served the stale table on
@@ -2002,6 +2010,15 @@ New worker: stale copy served in **7 ms** with no network wait, the refresh
 landing behind it, and the corrected table on the next load. A day's worth of
 staleness across the whole app cost five `304`s and one `200` — the one file
 that had actually changed.
+
+Then on the live site, after deploying: `atlas-v1` alone (the old cache gone),
+twelve entries, every one stamped, no tile archive among them. A stale copy
+served in 15 ms and the refresh converging to an age of 2 s, so it will not ask
+again for another ten minutes. Cloudflare answers a conditional GET with `304`
+and **0 bytes** for both JSON files, which is what makes a refresh of the 1 MB
+`labels.json` free. Note that the browser reports a revalidated response to the
+page as `200`, so a network panel cannot tell these apart — `curl -H
+'If-None-Match: …'` can.
 
 ### Still open, found by reviewing this change
 

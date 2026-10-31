@@ -19,13 +19,21 @@
  * The values here are MEASURED from https://networkfieldnotes.com/what-if-atlas/
  * (GitHub Pages behind Cloudflare), not guessed:
  *
- *   index.html, data/*.json, manifest   Cache-Control: max-age=600
- *   fonts.css, fonts/*, icons/*, tiles/ Cache-Control: max-age=14400
- *   everything                          ETag (weak), Last-Modified, Date,
- *                                       Vary: Accept-Encoding, Accept-Ranges
+ *   .js .css .woff2 .png .gz   Cache-Control: max-age=14400
+ *   everything else            Cache-Control: max-age=600
+ *   everything                 ETag (weak), Last-Modified, Date,
+ *                              Vary: Accept-Encoding, Accept-Ranges
  *
- * Pages serves `assets/*` with the same max-age as everything else — the names
- * are content-hashed, so it does not need more, and neither does the worker.
+ * The split is by EXTENSION, not by directory — it is Cloudflare's default
+ * cacheable-extension list, so `assets/main-<hash>.js` gets 14400 while
+ * `assets/maplibre-gl-worker-<hash>.mjs` sitting beside it gets 600, because
+ * `.mjs` is not on that list. index.html, the JSON and the manifest get 600.
+ * Measured from the live cache after a deploy, after an earlier version of
+ * this file guessed 600 for everything under `assets/` and was wrong.
+ *
+ * It makes no difference to the worker, which takes `assets/*` cache-first on
+ * the strength of the content hash and never reads their max-age at all — but
+ * a fixture that misreports production is how this class of bug starts.
  *
  * Range requests are answered because PMTiles reads archives by range and the
  * map renders nothing without them. Suffix ranges (`bytes=-500`, the directory
@@ -63,8 +71,8 @@ const TYPES = {
   '.gz': 'application/gzip',
 };
 
-/** The two values Pages actually uses, by path. */
-const maxAge = (rel) => (/\.(?:woff2|png)$|^fonts\.css$|\.pmtiles\.gz$/.test(rel) ? 14400 : 600);
+/** The two values the live site actually uses, split by extension. */
+const maxAge = (rel) => (/\.(?:js|css|woff2|png|svg|gz)$/.test(rel) ? 14400 : 600);
 
 createServer((req, res) => {
   const path = decodeURIComponent((req.url || '').split('?')[0]);
