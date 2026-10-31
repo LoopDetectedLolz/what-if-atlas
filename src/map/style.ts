@@ -102,8 +102,16 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
       }),
     ),
 
-    // Free-hand strokes, clipped to their region. Written by the app (E4).
+    // Free-hand strokes, already clipped to their region. Written by
+    // StrokeRenderer in src/tools/pen.ts.
     strokes: { type: 'geojson', data: emptyFC() },
+
+    // The stroke being drawn right now. A LineString in lng/lat rather than a
+    // polygon, because building the real outline is a boolean union costing
+    // tens of milliseconds and the preview has to keep up with the nib — and
+    // because a geographic source reprojects itself for free when a finger
+    // pans the map mid-stroke.
+    'stroke-preview': { type: 'geojson', data: emptyFC() },
 
     // Label anchors: one point per country, province and populated place, at
     // Natural Earth's own cartographer-chosen label coordinates.
@@ -150,7 +158,9 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
       },
     },
 
-    // Free-hand strokes sit above the region fills.
+    // Free-hand strokes sit above the region fills, so a mark is never buried
+    // under a colour laid down afterwards, and below the hatching, so an
+    // occupation mask still reads as covering everything beneath it.
     {
       id: 'stroke-fill',
       type: 'fill',
@@ -158,6 +168,20 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
       paint: {
         'fill-color': ['coalesce', ['get', 'color'], '#F5A524'],
         'fill-opacity': 0.95,
+      },
+    },
+
+    // The live nib. Round cap and join so a drawn line has no corners in it,
+    // and slightly transparent so it reads as not yet committed.
+    {
+      id: 'stroke-preview-line',
+      type: 'line',
+      source: 'stroke-preview',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['coalesce', ['get', 'color'], '#F5A524'],
+        'line-width': 7,
+        'line-opacity': 0.75,
       },
     },
 

@@ -521,9 +521,6 @@ PMTiles serve over HTTP Range requests (`206 Partial Content` confirmed).
 
 **The shared-border fade** — the adjacency table it needs is now built.
 
-**Free-hand pen clipped within a region**, for shapes that are not whole
-regions. Needs the full-geometry problem solved (see the hatching note above).
-
 **Bookmarks** — the scenario model carries them; there is no UI.
 
 ---
@@ -853,7 +850,7 @@ legibility gain, but the original was never broken.
 | **E1** | Region tiles, snap levels, layered painting, sweep brush, fill, undo/redo, palette, export/import. | **Built and verified.** |
 | **E2** | Grid-anchored occupation hatching. | **Built and verified** — via a tile-anchored fill-pattern, not clipped geometry; see §3a for why. |
 | **E3** | Labels, then the shared-border fade, and bookmarks with thumbnails. | **Labels built and verified** — and with no glyph pipeline at all; see §9. Fade and bookmarks next. |
-| **E4** | Free-hand pen clipped within a single region, for shapes that are not whole regions. Eraser for strokes. | |
+| **E4** | Free-hand pen clipped within a single region, for shapes that are not whole regions. Eraser for strokes. | **Built and verified** — see §11. The full-geometry problem turned out not to block it. |
 | **E5** | Offline/PWA, iPad polish, performance pass. | |
 
 **Parked:** the country/military/energy info panels, the recording engine, the
@@ -1421,3 +1418,130 @@ The easing curve was checked by stepping the fader's clock deterministically —
 `requestAnimationFrame` to about 1 Hz and collapses the whole 300 ms into two
 frames. **The fade's smoothness, like the frame rate, has never been seen at a
 real frame rate.** It has to be watched on the iPad.
+
+---
+
+## 11. The free-hand pen — and why the full-geometry problem did not block it
+
+Everything else in this editor paints whole REGIONS, and that is what makes
+"colour cannot leave the lines" true by construction: there is no way to express
+a mark that crosses a border, so none can be made. The pen is the exception, so
+it has to earn the same guarantee a different way — the drawn shape is
+INTERSECTED with the region it started in, and whatever lies outside is thrown
+away before it is ever stored.
+
+Verified: a stroke dragged from the middle of Spain west to screen x=190, well
+out past Portugal and into the Atlantic, stops dead at x=314 — the Portuguese
+border. Another, drawn across Spain to the Mediterranean, stops on the coastline
+at Valencia. "Paints on land only" needs no separate rule: regions are land, and
+a stroke begun over water finds no region and is declined.
+
+### The clip geometry: the objection, and why it does not apply here
+
+§3's hatching note gives up on clipped vector stripes because clipping needs a
+region's FULL polygon and `queryRenderedFeatures` only ever returns tile-clipped
+pieces of what is on screen — the hatch would stop at the viewport edge and need
+recomputing on every pan.
+
+Every word of that is still true, and none of it bites here. A hatch must cover
+its whole region continuously, forever, at every zoom. A stroke is drawn ONCE,
+by hand, on screen, in one gesture: whatever the pen could reach is on screen,
+so the pieces on screen cover it, and once intersected the result is a fixed
+geographic polygon that never needs computing again.
+
+The query is bounded by the stroke's own screen box rather than the viewport, so
+what comes back is the two or three tiles the stroke actually crosses. That box
+is projected fresh at commit time, not remembered from when the samples were
+taken, because a finger may have panned the map the whole time.
+
+**Two limits, both real and both documented rather than solved.** A stroke drawn
+at low zoom is clipped against geometry simplified for that zoom, so its cut edge
+follows a coarser border than you see after zooming in. And if the map is panned
+mid-stroke until part of the mark leaves the viewport, the clip can only use what
+is still on screen.
+
+### Why the path is recorded in longitude and latitude
+
+Because a finger may pan or pinch WHILE the Pencil draws — the gesture model
+this app is built on. Screen coordinates would smear the stroke across the map
+as it moved. Every sample is unprojected the moment it arrives, so the ink stays
+on the ground it was laid on, and the live preview reprojects itself for free
+because MapLibre is already drawing it from a geographic source.
+
+### The width is not a width, it is an area
+
+A nib has thickness, so the path becomes a polygon: a disc at every sample plus
+the quad swept between consecutive samples, all unioned. That gives round caps
+and round joins for nothing — the disc at a corner IS the join — and it is the
+one construction that stays correct when the path doubles back on itself, which
+a hand-drawn line does constantly. Apple Pencil pressure varies the disc, so the
+line thickens and thins; a mouse reports a constant 0.5 and is drawn at full
+weight instead of permanently at half.
+
+⚠️ **The cost is in the union, and it had to be bounded.** Measured: 100 samples
+union in 12 ms, 400 in 93 ms, and a Pencil samples at up to 240 Hz, so a
+two-second stroke arrives with hundreds of points mostly a fraction of a pixel
+apart. Three passes — drop samples too close to see, run Ramer–Douglas–Peucker,
+then raise the tolerance and repeat if still over 200 points — make the cost
+depend on the SHAPE of the stroke rather than how long it was drawn for. Checked
+with 200, 480 and 960 raw samples: all three collapse to about 180 points and
+commit in 10–12 ms.
+
+⚠️ **The tolerance is in screen pixels and must be converted.** A world unit
+here is a pixel at zoom 11 and nothing like a pixel anywhere else: at zoom 4 one
+screen pixel is 128 world units, at zoom 15 a sixteenth of one. Left unconverted
+it would thin a stroke drawn at the world view into a straight line and leave one
+drawn at street level untouched. This was a real bug, caught by the geometry
+tests before it reached the screen.
+
+### A stroke is a MULTI-polygon, and the format had to change
+
+Clipping a hand-drawn mark to a region routinely breaks it into pieces: the
+stroke wanders out of the country and back in, or crosses a lake drawn as a
+hole. `Stroke.rings` was a single GeoJSON Polygon and could only ever have
+stored the first piece — silently losing half of a child's mark.
+
+So version 3 of the scenario format stores `shape`, a MultiPolygon, and
+`migrate()` lifts an old `rings` into it. Verified with the case that motivates
+it: a stroke run out of Spain into Portugal and back, on two different lines, is
+stored as two polygons, both cut at the border.
+
+### Smaller things that were decided rather than defaulted
+
+- **The pen obeys the snap level.** Zoomed out it is held by a whole country;
+  zoomed in by a province, then a city — the same rule as the brush, so there is
+  nothing extra to learn, and the hover outline already shows the boundary that
+  is about to hold you.
+- **The pen may decline a gesture**, which no other tool does. It asks for a
+  region BEFORE calling preventDefault, so a stroke begun at sea is left to the
+  map to pan with rather than swallowed.
+- **A finger tap does nothing** while the pen is selected. Fingers pan; a tap
+  would otherwise leave a dot wherever the map was steadied.
+- **The eraser lifts strokes first**, before clearing the region underneath,
+  because a mark drawn ON a country is the thing being pointed at. MapLibre does
+  the hit test — the strokes are a rendered layer, so `queryRenderedFeatures` is
+  the whole implementation.
+- **A half-drawn stroke survives `pointercancel`.** That is a guess, not a
+  decision: `probe.html` exists to find out whether a resting palm cancels a
+  Pencil stroke on iPadOS and it has STILL never been run on the device. Keeping
+  matches what painting does, and a wrong mark can be undone where a lost one
+  must be drawn again.
+- **The live preview is a line, not the real outline.** Building the outline
+  costs tens of milliseconds and the preview has to keep up with the nib.
+
+### Verified, 2026-10-30
+
+Driven through the real pointer path with synthetic Pencil events carrying
+pressure: a 221-sample squiggle commits in 10.3 ms; the preview tracks the nib
+and clears on release; the mark is cut at the Portuguese border and at the
+Mediterranean coast; a stroke begun at sea adds nothing; the eraser lifts exactly
+the stroke under the tap and undo brings it back; strokes survive the relief
+restyle in both directions; the format round-trips and lifts a version-2 file;
+iPad portrait draws correctly at 768×1024.
+
+**Not verified: how it feels.** Synthetic events are evenly spaced and perfectly
+smooth, which is the one thing a real hand is not, and the browser pane cannot
+show the frame rate. Whether the preview keeps up with a Pencil, whether 7 px is
+the right nib, and whether the commit hitch is noticeable all belong to the iPad
+session that already owes us `probe.html`, the frame-rate gate and the border
+fade's smoothness.

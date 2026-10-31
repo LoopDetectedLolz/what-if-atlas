@@ -14,11 +14,11 @@
  */
 
 import type { Map as MlMap, Point } from 'maplibre-gl';
-import { LEVEL_DEFS, LEVELS, type Level, type Region } from '../map/regions';
+import { LEVEL_DEFS, LEVELS, STROKE_LAYER, type Level, type Region } from '../map/regions';
 import type { ScenarioStore } from '../state/scenario';
 import { snapAlong, snapAt, showSnapOutline, type SnapResult } from './snap';
 
-export type Tool = 'brush' | 'fill' | 'hatch' | 'eraser';
+export type Tool = 'brush' | 'pen' | 'fill' | 'hatch' | 'eraser';
 
 // ── renderer ────────────────────────────────────────────────────────────────
 
@@ -169,6 +169,7 @@ export class PaintController {
 
   extendStroke(point: Point): void {
     if (!this.painting || !this.last) return;
+    if (this.opts.getTool() === 'eraser') this.eraseStrokesAt(point);
     // Interpolate: a fast drag yields sparse samples and would skip narrow
     // countries entirely.
     const hits = snapAlong(this.map, this.last, point, this.opts.getLevel());
@@ -191,8 +192,35 @@ export class PaintController {
   }
 
   private applyAt(point: Point): void {
+    if (this.opts.getTool() === 'eraser') this.eraseStrokesAt(point);
     const hit = snapAt(this.map, point, this.opts.getLevel());
     if (hit) this.paintRegion(hit);
+  }
+
+  /**
+   * Lift any free-hand stroke under the pointer.
+   *
+   * MapLibre does the hit test: the strokes are a rendered layer, so asking
+   * what is under a point is exactly queryRenderedFeatures, and there is no
+   * need for point-in-polygon code of our own over shapes that may have
+   * hundreds of vertices and holes.
+   *
+   * Strokes go first, before the region underneath is cleared, because a mark
+   * drawn ON a country is the thing the user is pointing at — rubbing it out
+   * should not also strip the colour beneath it in the same pass.
+   */
+  private eraseStrokesAt(point: Point): boolean {
+    if (!this.map.getLayer(STROKE_LAYER)) return false;
+    let removed = false;
+    for (const f of this.map.queryRenderedFeatures(point, { layers: [STROKE_LAYER] })) {
+      const id = f.properties?.id;
+      if (typeof id === 'string') {
+        this.store.removeStroke(id);
+        this.sweepCount++;
+        removed = true;
+      }
+    }
+    return removed;
   }
 
   private paintRegion(region: Region): void {

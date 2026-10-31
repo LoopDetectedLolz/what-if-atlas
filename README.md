@@ -42,6 +42,7 @@ npm run preview    # serves dist/ at http://localhost:4173/what-if-atlas/
 | Path | What |
 |---|---|
 | `src/map/` | Map construction, the atlas style, the label layers, and the worker fix |
+| `src/tools/stroke.ts` | Pure geometry for the pen — buffering a path, clipping it. Runs in node. |
 | `src/dev/fps.ts` | Frame-rate probe — the milestone sign-off gate |
 | `src/ui/glass.css` | The glass system, ported from networkfieldnotes.com |
 | `probe.html` | **Milestone-0 device probe** — see below |
@@ -58,6 +59,21 @@ It has to run on the real iPad to mean anything. It is readable and reportable
 on-device because there is no usable console there: four guided tests with
 auto-detected verdicts, the Pencil's actual capabilities, and a **Copy report**
 button.
+
+## The free-hand pen
+
+Everything else paints whole regions, which is what makes "colour cannot leave
+the lines" true by construction. The pen is the exception, so it earns the same
+guarantee by being CLIPPED: the drawn shape is intersected with the region it
+started in, and what falls outside is discarded before it is stored. Paints on
+land only follows for free — the sea is not a region, so a stroke begun there is
+declined.
+
+The path is recorded in longitude and latitude as it is drawn, not in screen
+pixels, so a finger can pan or pinch the map while the Pencil draws. Pressure
+varies the width. PLAN.md §11 has the rest, including why the clip works here
+when it does not for hatching, and the two limits that are documented rather
+than solved.
 
 ## The fading borders
 

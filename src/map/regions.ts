@@ -179,6 +179,18 @@ export interface Region {
   country: string | null;
 }
 
+/**
+ * The free-hand pen's style ids.
+ *
+ * `strokes` holds the marks already drawn and clipped; `stroke-preview` holds
+ * the one under the nib. They are separate sources because the preview is
+ * rewritten many times a second and the committed strokes almost never are.
+ */
+export const STROKE_SOURCE = 'strokes';
+export const STROKE_LAYER = 'stroke-fill';
+export const PREVIEW_SOURCE = 'stroke-preview';
+export const PREVIEW_LAYER = 'stroke-preview-line';
+
 /** A region id that cannot exist, so an outline filter matches nothing. */
 export const NO_MATCH = '\u0000none';
 

@@ -23,6 +23,7 @@ import { LEVEL_DEFS, LEVELS, autoLevel, type Level } from './map/regions';
 import { ScenarioStore, emptyScenario, migrate, serialise } from './state/scenario';
 import { PaintController, PaintRenderer, type NeighbourTable, type Tool } from './tools/paint';
 import { BorderFader } from './tools/borders';
+import { PenController, StrokeRenderer } from './tools/pen';
 import { PALETTE, RESET } from './tools/palette';
 import type { SnapResult } from './tools/snap';
 import { ensureHatchNone, resetHatchImages, syncHatch } from './tools/hatch';
@@ -109,11 +110,18 @@ function reloadStyle(): void {
     syncHatch(map, store);
     renderer.syncAll();
     fader.resync();
+    strokes.sync();
   });
 }
 
 const renderer = new PaintRenderer(map, store);
 const fader = new BorderFader(map, store);
+const strokes = new StrokeRenderer(map, store);
+const pen = new PenController(map, store, {
+  getColor: () => color,
+  getLevel: currentLevel,
+  onChanged: refreshChrome,
+});
 const painter = new PaintController(map, store, {
   getColor: () => color,
   getLevel: currentLevel,
@@ -138,6 +146,7 @@ fetch(`${BASE}data/neighbours.json`)
 map.on('zoom', refreshLevelUI);
 map.once('load', () => {
   renderer.syncAll();
+  strokes.sync();
   ensureHatchNone(map);
   syncHatch(map, store);
   refreshLevelUI();
@@ -187,6 +196,18 @@ const paints = (e: PointerEvent): boolean =>
 
 container.addEventListener('pointerdown', (e) => {
   if (!paints(e)) return;
+
+  // The pen is the one tool that can decline a gesture: it draws on land, and
+  // over water there is no region to clip to. Ask BEFORE preventing the
+  // default, so a stroke begun at sea is left to the map to pan with instead
+  // of being swallowed.
+  if (tool === 'pen') {
+    if (!pen.begin(pointAt(e), e.pressure, e.pointerType === 'pen')) return;
+    e.preventDefault();
+    document.body.classList.add('painting');
+    return;
+  }
+
   e.preventDefault();
   document.body.classList.add('painting');
   painter.beginStroke(pointAt(e));
@@ -195,7 +216,14 @@ container.addEventListener('pointerdown', (e) => {
 
 container.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return;      // fingers pan, never paint
+  if (pen.active) {
+    pen.extend(pointAt(e), e.pressure, e.pointerType === 'pen');
+    return;
+  }
   if (paints(e)) painter.extendStroke(pointAt(e));
+  // Hovering still outlines the region under the pointer with the pen tool
+  // selected, and it is worth more there than anywhere else: that outline is
+  // the edge the stroke will be cut at.
   else painter.hover(pointAt(e));
 });
 
@@ -205,16 +233,24 @@ let lastPointerPaint = 0;
 const finish = (): void => {
   if (!document.body.classList.contains('painting')) return;
   document.body.classList.remove('painting');
-  painter.endStroke();
+  if (pen.active) pen.end();
+  else painter.endStroke();
   lastPointerPaint = performance.now();
 };
 container.addEventListener('pointerup', finish);
 container.addEventListener('pointerleave', finish);
 // pointercancel fires when the browser takes the viewport, and may fire for
 // palm rejection. Keep what was painted; undo is one tap away.
+//
+// ⚠️ A HALF-DRAWN STROKE IS KEPT TOO, and that is a guess, not a decision:
+// probe.html exists to find out whether a resting palm cancels a Pencil stroke
+// on iPadOS and it has still never been run on the device. Keeping matches
+// what painting does, and a wrong mark can be undone, where a lost one has to
+// be drawn again.
 container.addEventListener('pointercancel', () => {
   document.body.classList.remove('painting');
-  painter.cancelStroke();
+  if (pen.active) pen.end();
+  else painter.cancelStroke();
 });
 
 // A plain tap on a touch screen should still paint one region, since the Pencil
@@ -227,6 +263,9 @@ container.addEventListener('pointercancel', () => {
 // window for browsers that report click as a plain MouseEvent. Without it one
 // click paints twice and takes two undos to reverse.
 map.on('click', (e) => {
+  // Not for the pen: a finger is for panning, and a tap would otherwise leave
+  // a dot wherever the map was steadied.
+  if (tool === 'pen') return;
   const orig = e.originalEvent as MouseEvent & { pointerType?: string };
   if (orig.pointerType && orig.pointerType !== 'touch') return;
   if (performance.now() - lastPointerPaint < 500) return;
@@ -264,7 +303,8 @@ const TOOL_NOTES: Record<Tool, string> = {
   brush: 'Drag to colour every region you cross.',
   fill: 'Tap to flood across touching regions of the same colour, stopping at the continent.',
   hatch: 'Tap or drag to mark regions as occupied, striped in the chosen colour.',
-  eraser: 'Clears the colour and any occupation mark.',
+  pen: 'Draw by hand. The mark is cut to the region you start in, and the sea takes no ink.',
+  eraser: 'Clears the colour, the occupation mark, and any drawing on top.',
 };
 
 function setTool(next: Tool): void {

@@ -19,13 +19,22 @@
 
 import { LEVELS, type Level } from '../map/regions';
 
-export const SCENARIO_VERSION = 2;
+export const SCENARIO_VERSION = 3;
 
 export interface Stroke {
   id: string;
   color: string;
-  /** Clipped to the region it started in; GeoJSON Polygon/MultiPolygon rings. */
-  rings: number[][][];
+  /**
+   * The mark itself, as GeoJSON MultiPolygon coordinates in lng/lat, already
+   * clipped to its region.
+   *
+   * ⚠️ MULTI-polygon, and in version 2 of this format it was a single one named
+   * `rings`. Clipping a hand-drawn shape to a region routinely breaks it into
+   * pieces — the stroke wanders out of the country and back in, or crosses a
+   * lake drawn as a hole — so a lone Polygon could only ever have stored the
+   * first piece. migrate() lifts an old `rings` into the new shape.
+   */
+  shape: number[][][][];
   /** The region it was clipped to, for the record. */
   clippedTo: { level: Level; id: string } | null;
 }
@@ -302,9 +311,36 @@ export function migrate(raw: unknown): Scenario {
     name: typeof s.name === 'string' ? s.name : base.name,
     paint: mergeMaps(s.paint),
     hatch: mergeMaps(s.hatch),
-    strokes: Array.isArray(s.strokes) ? s.strokes.filter((x) => x && Array.isArray(x.rings)) : [],
+    strokes: migrateStrokes(s.strokes),
     bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : [],
   };
+}
+
+/**
+ * Tolerate both stroke shapes. Version 2 stored one Polygon under `rings`;
+ * version 3 stores a MultiPolygon under `shape`. Nothing in the wild has ever
+ * written a stroke, so this is insurance rather than history — but a scenario
+ * file is a child's work and silently dropping part of it would be the worst
+ * possible failure.
+ */
+function migrateStrokes(raw: unknown): Stroke[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Stroke[] = [];
+  for (const s of raw) {
+    if (!s || typeof s !== 'object') continue;
+    const v = s as Partial<Stroke> & { rings?: number[][][] };
+    const shape = Array.isArray(v.shape) ? v.shape
+      : Array.isArray(v.rings) ? [v.rings]
+        : null;
+    if (!shape || !shape.length) continue;
+    out.push({
+      id: typeof v.id === 'string' ? v.id : `s${out.length}`,
+      color: typeof v.color === 'string' ? v.color : '#000000',
+      shape,
+      clippedTo: v.clippedTo ?? null,
+    });
+  }
+  return out;
 }
 
 export function serialise(s: Scenario): string {
