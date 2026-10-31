@@ -83,16 +83,27 @@ for t in countries provinces urban borders subborders; do
   [ -f "$local_file" ] && real=$(wc -c < "$local_file" | tr -d ' ')
 
   for range in 0-16383 1048576-1064959; do
-    hdr=$(curl -sS -r "$range" -H "Accept-Encoding: $BROWSER_AE" -D - -o "/dev/null" \
-          "$BASE/tiles/$name" 2>/dev/null | tr -d '\r')
-
-    status=$(printf '%s\n' "$hdr" | awk '/^HTTP\/[0-9.]+ [0-9]{3}/ {s=$2} END {print s}')
+    # ⚠️ RETRY ON A DROPPED REQUEST, OR THIS SCRIPT LIES IN THE OTHER DIRECTION.
+    # A connection that fails outright leaves no status line, which read as "the
+    # host ignored the range" — a frightening and completely wrong diagnosis for
+    # one dropped packet on a 38 MB archive. Only an answer the host actually
+    # gave is worth judging.
+    attempt=0
+    while [ "$attempt" -lt 3 ]; do
+      attempt=$((attempt + 1))
+      hdr=$(curl -sS --retry 0 -r "$range" -H "Accept-Encoding: $BROWSER_AE" -D - -o "/dev/null" \
+            "$BASE/tiles/$name" 2>/dev/null | tr -d '\r')
+      status=$(printf '%s\n' "$hdr" | awk '/^HTTP\/[0-9.]+ [0-9]{3}/ {s=$2} END {print s}')
+      [ -n "$status" ] && break
+    done
     enc=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-encoding:" {print $2}')
     etag=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "etag:" {print $2}')
     # content-range: bytes <start>-<end>/<total>
     total=$(printf '%s\n' "$hdr" | awk 'tolower($1) == "content-range:" {split($3, a, "/"); print a[2]}')
 
-    if [ "$status" != 206 ]; then
+    if [ -z "$status" ]; then
+      bad "$name @$range: no response after $attempt attempts — the request never completed, which is a network problem and not a serving one"
+    elif [ "$status" != 206 ]; then
       bad "$name @$range: status $status, expected 206 — the host ignored the range"
     elif [ -n "$enc" ]; then
       bad "$name @$range: 206 but content-encoding: $enc — a compressed range is not byte serving"
