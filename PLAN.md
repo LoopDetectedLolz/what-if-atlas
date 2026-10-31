@@ -1885,6 +1885,25 @@ reports success even while the map shows white. The honest test is
 `queryRenderedFeatures`, which only returns what the tiles actually carry. The
 first version of this check used `getFeatureState` and passed on a broken build.
 
+### Two things the deploy itself exposed
+
+⚠️ **A tile fix does not reach anyone for up to four hours.** The archives are
+served from fixed paths — `tiles/countries.pmtiles.gz` never changes name — and
+Pages sends `cache-control: max-age=14400`. The deploy watcher here timed out
+after ten minutes still being handed the OLD archive, and only once Cloudflare
+revalidated (`cf-cache-status: EXPIRED`) did the new one appear. Nothing is
+broken, but "deployed" and "reaching users" are four hours apart for tile data,
+and that is worth knowing before concluding a tile fix did not work.
+
+⚠️ **`public/sw.js` caches `data/*.json` forever, on an assumption that is only
+half true.** Its comment reads "Vite's filenames are content-hashed, so a cached
+hit can never be stale" — correct for `assets/*`, and wrong for
+`data/labels.json` and `data/neighbours.json`, which are served from fixed paths
+and cached first. A returning user would never receive an update to either.
+Tiles are safe only by accident: the worker skips range requests, so it never
+caches them at all. Not fixed here; it belongs with the offline work in E5,
+where the caching strategy is being rewritten anyway.
+
 ### The rest of the self-check, same session
 
 Everything else was re-run from a wiped store on the fixed build:
