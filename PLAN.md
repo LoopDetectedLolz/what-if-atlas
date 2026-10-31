@@ -2022,18 +2022,6 @@ page as `200`, so a network panel cannot tell these apart — `curl -H
 
 ### Still open, found by reviewing this change
 
-⚠️ **Offline does not work on the second visit, and the old comment claimed it
-did.** `src/main.ts` registers the worker from the window `load` event, which
-does not fire until every subresource of the first visit has already been
-fetched — so on visit 1 there is nothing left to intercept. The cache after a
-first visit holds the shell and `fonts.css` and **no `assets/` at all**;
-confirmed by listing it, not inferred. Visit 2 is the first load the worker sees
-end to end, which makes visit 3 the first that could work offline — and WebKit's
-seven-day eviction (§13) returns an idle iPad to visit 1 again and again. The
-fix is to precache the shell's hashed asset urls at install by reading them out
-of the shell HTML; moving the registration off `load` is not enough on its own.
-Not done here.
-
 ⚠️ **A VERSION bump pulls the cache out from under an already-open page.**
 `install` skip-waits and `activate` deletes every other `atlas-` cache and
 claims live clients, so an atlas left open on an iPad across a deploy keeps
@@ -2044,3 +2032,87 @@ an oversight. The install half is fixed: it no longer catches its own failure,
 so a precache that fails now discards the worker and leaves the previous one
 serving its intact cache, instead of promoting an empty one and wiping the good
 one on the way through.
+
+## 16. Offline, which had never actually worked
+
+Found by reviewing §15, then confirmed by listing the cache rather than reading
+the code: **the app had never booted offline.** The header of `public/sw.js`
+claimed "offline on a second visit". The cache after a first visit held two
+entries — the shell and `fonts.css` — and no `assets/` at all.
+
+### Why a first visit cached nothing
+
+`src/main.ts` registers the worker from the window `load` event, and `load`
+does not fire until every subresource of the page has already been fetched. By
+the time `install` runs there is nothing left for the fetch handler to see. So
+visit 2 was the first load the worker controlled end to end, which made visit 3
+the first that could have worked offline — and WebKit's seven-day eviction
+(§13) puts an idle iPad back to visit 1 over and over.
+
+What an offline visit 2 actually gave you is worth being precise about, because
+it is worse than a failure: the shell loaded from the precache, every script
+and stylesheet it asked for failed, and the child got **an unstyled HTML
+skeleton with dead buttons, stuck on "Opening the last drawing…"**. A page that
+looks loaded and does nothing.
+
+### Reading the filenames instead of guessing them
+
+A hand-rolled worker cannot know Vite's hashed filenames at build time, but it
+can read them at install time out of the shell it has just fetched. `precache()`
+does three passes:
+
+1. the shell, and every `src`/`href` in it. Scripts and stylesheets are
+   **required** — without them an offline load is the dead page above;
+2. asset names written *inside* those bundles. **MapLibre's worker chunk is
+   reached only this way**: it appears nowhere in the shell, existing as a bare
+   string in the maplibre chunk that is handed to `WORKER_URL` at runtime. Miss
+   it and the map cannot start at all. It is also the only cross-asset
+   reference in the entire bundle, so one hop is enough;
+3. the woff2 files the stylesheets name, then the icons, manifest and the two
+   data tables — best effort, because the app degrades without these rather
+   than dying, and a worker that refuses to install is worse than one that
+   installs without a font.
+
+Nothing reachable only through CSS: every `url()` in the built stylesheets is a
+`data:` URI, so there is no third hop to follow. Tiles are refused explicitly
+even when the shell preloads one, so the crawl can never drag a 24 MB archive in.
+
+### What it costs
+
+The cache goes from 2 entries to **19, 3.09 MB** — but almost none of that is
+new traffic. Install runs after `load`, so the browser has just fetched most of
+it and `fetchFresh` asks conditionally. Measured on a cold first visit: the 1 MB
+maplibre bundle, the 519 KB worker chunk and both JSON tables all came back
+`304`. The only real downloads were the four font subsets the page had not yet
+needed, the two icons and the manifest — about 100 KB.
+
+### Measured, offline
+
+Server stopped, so the origin is genuinely unreachable. The app boots: 4
+stylesheets, 24 swatches, 5 tools, 7 font faces, a map canvas — indistinguishable
+from online apart from the basemap.
+
+⚠️ **A screenshot does not prove this.** The browser's own HTTP cache holds the
+same files and would have served them whether or not any of this worked. The
+isolating test is `fetch(url, {cache: 'reload'})`, which skips the HTTP cache
+entirely — with the server down, anything that still resolves can only have come
+from the service worker. All six probes returned full byte counts
+(`maplibre-BZb1ahH5.js` 1,065,411 b, the worker chunk 519,372 b,
+`noto-sans-vietnamese.woff2` 14,508 b), while the two controls — a tile and a
+nonexistent path, neither of them cached — both failed with `TypeError: Failed
+to fetch`. That is the network being dead and the cache answering anyway.
+
+The old behaviour was then reproduced on the spot by deleting everything from
+the cache except the shell and `fonts.css` and reloading, still offline: the
+unstyled skeleton, exactly as described above. Same worker, same offline
+condition, only the cache contents different.
+
+Back online, a gutted cache refills through the ordinary runtime path without a
+VERSION bump — though only with what the page actually requests, since `install`
+runs once per version.
+
+### Still not offline
+
+The tile archives. They are read by Range request and `Cache.put()` rejects a
+206, so an offline launch is a working editor over empty ocean. That is §3's
+job and belongs in IndexedDB, not here.

@@ -2,21 +2,17 @@
    nothing else on networkfieldnotes.com — the blog has its own /sw.js for the
    field kit, and the more specific scope wins for pages under it.
 
-   MILESTONE 0: runtime caching only. A hand-rolled worker cannot know Vite's
-   content-hashed filenames at build time, so instead of precaching a manifest
-   it caches same-origin responses as they are requested.
+   A hand-rolled worker cannot know Vite's content-hashed filenames at build
+   time — but it does not have to. install() reads them out of the shell it has
+   just fetched and follows them one hop into the bundles, so the whole boot
+   path is cached on the FIRST visit rather than the third. See precache().
 
-   ⚠️ THAT DOES NOT YET ADD UP TO OFFLINE, AND AN EARLIER VERSION OF THIS
-   COMMENT CLAIMED IT DID ("offline on a second visit"). It does not, and the
-   cache contents after a first visit say so plainly: the shell and fonts.css,
-   and no `assets/` at all. src/main.ts registers this worker from the window
-   `load` event, which does not fire until every subresource of the first visit
-   has already been fetched — so on visit 1 there is nothing left for the fetch
-   handler to intercept. Visit 2 is the first one this worker sees end to end,
-   which makes visit 3 the first that could work offline; and WebKit's
-   seven-day eviction returns an idle iPad to visit 1 repeatedly. Offline on
-   visit 2 needs the shell's hashed asset urls precached at install, by reading
-   them out of the shell HTML. Not done here. PLAN.md section 3 and 15.
+   ⚠️ OFFLINE STILL MEANS "THE APP, WITHOUT A BASEMAP". The tile archives are
+   deliberately never stored here — they are read by Range request and the
+   Cache API refuses a 206 — so an offline launch gives a working editor over
+   empty ocean. Whole-archive offline is PLAN.md section 3, and belongs in
+   IndexedDB. What this file guarantees is that the app boots, which it
+   previously did not: see PLAN.md section 16.
 
    ── Why the default is stale-while-revalidate ───────────────────────────────
 
@@ -62,29 +58,187 @@
 var VERSION = 'atlas-v1';
 var SCOPE = new URL(self.registration.scope).pathname;
 
+/* How far the crawl below will follow chunk names before giving up. The real
+   graph is two deep and six wide; this only exists so a pathological regex
+   match can never turn install into a spider. */
+var MAX_CRAWL = 60;
+
+/* Files the app wants but can live without, fetched last and never allowed to
+   fail the install. Neither is linked from the shell, so neither is reachable
+   by crawling: `neighbours.json` is what the fill tool floods across, and
+   without it fill quietly degrades to one region at a time. */
+var EXTRA = ['data/neighbours.json', 'data/labels.json', 'manifest.webmanifest'];
+
 self.addEventListener('install', function (e) {
-  /* The shell only. Everything else arrives via the fetch handler below.
-
-     ⚠️ NOT Cache.addAll(), which writes straight past store() and so leaves
-     these two entries with no stamp — and an unstamped entry is stale by
-     definition, so the shell and fonts.css would have revalidated on every
-     single load, for ever, while the files they sit beside behaved.
-
-     ⚠️ AND NOTHING CATCHES. Letting install reject is the whole point of
-     install: the browser throws the half-built worker away and the previous
-     one keeps serving its intact cache until a later attempt succeeds. The
-     earlier version ended `.catch(function () { return self.skipWaiting(); })`,
-     which did the opposite — a precache that failed because the wifi dropped
-     mid-install still promoted the worker, and activate() below then deleted
-     the fully populated cache it was replacing. One flaky moment during a
-     deploy and the shell fallback at the bottom of this file was dead for the
-     life of that VERSION, because `SCOPE` is written here and nowhere else. */
-  e.waitUntil(
-    Promise.all([SCOPE, SCOPE + 'fonts.css'].map(function (p) {
-      return fetchFresh(p).then(function (r) { return store(new Request(p), r); });
-    })).then(function () { return self.skipWaiting(); })
-  );
+  e.waitUntil(precache().then(function () { return self.skipWaiting(); }));
 });
+
+/**
+ * Cache everything needed to boot with no network, discovered rather than
+ * listed.
+ *
+ * ⚠️ PRECACHING THE SHELL ALONE IS NOT OFFLINE, AND CLAIMING OTHERWISE IS HOW
+ * THIS WENT UNNOTICED. The previous version cached `SCOPE` and `fonts.css` and
+ * the comment at the top of this file said that gave "offline on a second
+ * visit". It did not. src/main.ts registers this worker from the window `load`
+ * event, which does not fire until every subresource of the first visit has
+ * already been fetched — so on visit 1 there was nothing left for the fetch
+ * handler to intercept, and the cache afterwards held two entries and no
+ * `assets/` at all. An offline visit 2 then served the shell and failed every
+ * script and stylesheet it asked for: a page that looks loaded, with a toolbar
+ * that does nothing. Only visit 3 worked, and WebKit's seven-day eviction
+ * (PLAN.md section 13) puts an idle iPad back to visit 1 again and again.
+ *
+ * A hand-rolled worker cannot know Vite's hashed filenames at build time, but
+ * it can read them at install time out of the shell it just fetched, which is
+ * what this does:
+ *
+ *   1. the shell, and every `src`/`href` in it — scripts and stylesheets are
+ *      REQUIRED, because without them an offline load is a dead page;
+ *   2. asset names written INSIDE those bundles. MapLibre's worker chunk is
+ *      reached this way and appears nowhere in the shell: it is a bare string
+ *      in the maplibre chunk, handed to WORKER_URL at runtime. Miss it and the
+ *      map cannot start at all, offline or on;
+ *   3. the woff2 files named by the stylesheets, then the icons, manifest and
+ *      the two data tables — best effort, because the app degrades without
+ *      these rather than dying, and a worker that refuses to install is worse
+ *      than one that installs without a font.
+ *
+ * None of this is free, but almost none of it is new traffic: install runs
+ * after `load`, so the browser has just fetched these and `fetchFresh` asks
+ * conditionally. Measured against the live site, a first visit's precache is
+ * 304s the whole way down.
+ *
+ * ⚠️ NOTHING CATCHES AT THE TOP. Letting install reject is the whole point of
+ * install: the browser throws the half-built worker away and the previous one
+ * keeps serving its intact cache until a later attempt succeeds. An earlier
+ * version ended `.catch(function () { return self.skipWaiting(); })`, which did
+ * the opposite — a precache that failed because the wifi dropped mid-install
+ * still promoted the worker, and activate() below then deleted the fully
+ * populated cache it was replacing.
+ */
+function precache() {
+  var shell = new URL(SCOPE, self.location.href).href;
+  var seen = {};
+  var code = [];
+  var styles = [];
+  var extras = [];
+
+  /** Drop anything already queued, so the crawl cannot revisit or loop. */
+  function fresh(list) {
+    return list.filter(function (u) {
+      if (seen[u]) return false;
+      seen[u] = true;
+      return true;
+    });
+  }
+
+  fresh([shell]);
+  return take(shell, true, true).then(function (html) {
+    fresh(linksIn(html || '', shell)).forEach(function (u) {
+      var path = new URL(u).pathname;
+      if (/\.m?js$/.test(path)) code.push(u);
+      else if (/\.css$/.test(path)) styles.push(u);
+      else extras.push(u);
+    });
+    // The boot path. A failure here means an offline load would be the dead
+    // page described above, so it must sink the install instead.
+    return Promise.all(code.map(function (u) { return take(u, true, true); }));
+  }).then(function (sources) {
+    var named = [];
+    sources.forEach(function (src) { named = named.concat(assetsIn(src || '', shell)); });
+    return Promise.all([
+      Promise.all(fresh(named).slice(0, MAX_CRAWL).map(function (u) { return take(u, false, false); })),
+      Promise.all(styles.map(function (u) { return take(u, true, true); })),
+    ]);
+  }).then(function (pair) {
+    var fonts = [];
+    pair[1].forEach(function (css, i) { fonts = fonts.concat(fontsIn(css || '', styles[i])); });
+    var rest = fresh(fonts).concat(extras, fresh(EXTRA.map(function (f) { return shell + f; })));
+    return Promise.all(rest.map(function (u) { return take(u, false, false); }));
+  });
+}
+
+/**
+ * Fetch one url into the cache, and hand back its text if asked.
+ *
+ * `required` is the difference between "this install is not worth keeping" and
+ * "the app will manage". store() reads a clone, so the body is still ours.
+ */
+function take(url, required, wantText) {
+  return fetchFresh(url).then(function (r) {
+    if (!r.ok) {
+      if (required) throw new Error(r.status + ' for ' + url);
+      return null;
+    }
+    return store(new Request(url), r).then(function () {
+      return wantText ? r.text() : null;
+    });
+  }).catch(function (err) {
+    if (required) throw err;
+    return null;
+  });
+}
+
+/** Absolute, hash-free, and only if it is ours to cache. */
+function resolve(value, base) {
+  try {
+    var u = new URL(value, base);
+    u.hash = '';
+    if (u.origin !== self.location.origin) return null;
+    if (u.pathname.indexOf(SCOPE) !== 0) return null;
+    // Tiles are never stored (see the fetch handler), so do not drag a 24 MB
+    // archive in here by accident either.
+    if (u.pathname.slice(SCOPE.length).indexOf('tiles/') === 0) return null;
+    return u.href;
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Everything the shell links: `src="…"` and `href="…"`. */
+function linksIn(html, base) {
+  var out = [];
+  var re = /(?:src|href)\s*=\s*["']([^"']+)["']/gi;
+  var m;
+  while ((m = re.exec(html))) {
+    var u = resolve(m[1], base);
+    if (u) out.push(u);
+  }
+  return out;
+}
+
+/**
+ * Asset filenames written inside a bundle.
+ *
+ * Vite leaves a chunk it loads at runtime as a plain string in the code, which
+ * is the only way to find MapLibre's worker. Matching is deliberately narrow —
+ * `assets/` plus a filename plus a code extension — and anything it gets wrong
+ * is only ever fetched best-effort, so a false positive costs one 404.
+ */
+function assetsIn(code, base) {
+  var out = [];
+  var re = /assets\/[A-Za-z0-9_.-]+\.(?:m?js|css)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    var u = resolve(m[0], base);
+    if (u) out.push(u);
+  }
+  return out;
+}
+
+/** The woff2 files a stylesheet names. */
+function fontsIn(css, base) {
+  var out = [];
+  var re = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+  var m;
+  while ((m = re.exec(css))) {
+    if (m[1].slice(0, 5) === 'data:') continue;
+    var u = resolve(m[1], base);
+    if (u) out.push(u);
+  }
+  return out;
+}
 
 self.addEventListener('activate', function (e) {
   e.waitUntil(
