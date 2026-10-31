@@ -2178,3 +2178,46 @@ it loses against real disk-backed storage. Both were fixed — the harness now
 reads the body first, as a client does, and its cache stub takes a real tick —
 and the test was then checked the only way worth checking: by putting the bug
 back and confirming it fails. It does.
+
+### Two things noticed while verifying §17
+
+The worker was caching **`sw.js` itself**. Harmless for updates — the browser's
+update check never passes through the fetch handler — but it got there because
+a debug probe fetched it from the page, and a stale copy of the worker sitting
+in the cache is dead weight at best. Now bypassed alongside `tiles/`.
+
+⚠️ **PMTiles logs a byte-serving error on every production load**, and it is
+NOT from any of this:
+
+```
+Error: Server returned no content-length header or content-length exceeding
+request. Check that your storage backend supports HTTP Byte Serving.
+```
+
+Established, not assumed:
+
+- it reproduces with **no service worker controlling the page**
+  (`navigator.serviceWorker.controller === null`), so the worker is not
+  involved — which figures, since it returns early for every range request and
+  for every `tiles/` path before touching `respondWith`;
+- all five archives answer a range request correctly from `curl`: `206`,
+  exact `content-length`, right `content-range`, and a suffix range
+  (`bytes=-500`, how PMTiles reads the directory at the tail) works too;
+- the same is true fetched from the page: `206`, 16,384 bytes, correct
+  `content-range`;
+- one load showed `urban.pmtiles.gz` returning a **zero-length body** with 300
+  bytes of headers, which is exactly what PMTiles is complaining about. It was
+  not reproducible on demand.
+
+So it is not the storage backend the message blames, and the map does load —
+58 range requests, all `206`, on the same page that logged the error. The
+likely shape is a cached or conditional response being handed back where
+PMTiles expects a fresh partial. Worth chasing before §3's offline tile work
+leans harder on this path. Note also that **every deploy changes every tile's
+ETag** even when the bytes are identical, because Pages republishes the lot —
+which puts a window of exactly this kind after each one.
+
+A measurement note for whoever picks it up: `performance.getEntriesByType('resource')`
+is useless here. MapLibre fetches tiles from its own worker thread, so the main
+thread's timeline showed **zero** tile requests on a load that plainly made
+them. Read the network panel or instrument the fetch instead.

@@ -416,6 +416,11 @@ self.addEventListener('fetch', function (e) {
   // ...and the archives are off limits whole, too. A plain GET of one is a
   // 24 MB body that this cache has no business holding and no way to update.
   if (path.indexOf('tiles/') === 0) return;
+  // Nor this script. The browser's update check never passes through here, so
+  // caching it cannot break an update — but a page that fetches `sw.js` for
+  // itself (a debug probe did, and it landed in the cache) leaves a copy that
+  // is dead weight at best and a stale script to read at worst.
+  if (path === 'sw.js') return;
 
   // Navigations: network first so a deploy is picked up, cache as fallback.
   if (req.mode === 'navigate') {
