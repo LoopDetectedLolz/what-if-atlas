@@ -281,3 +281,16 @@ body.painting .readout { opacity: 1; }
   color: var(--text-muted);
   margin: var(--s2) 0 0;
 }
+
+/* ── autosave status ─────────────────────────────────────────────────────── */
+
+.save-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: var(--s2) 0 0;
+}
+/* Only a real failure is allowed to shout. "Saved" is the quiet default,
+   because an indicator that insists on being noticed stops being read. */
+.save-note[data-state="failed"] { color: #F0A58C; }

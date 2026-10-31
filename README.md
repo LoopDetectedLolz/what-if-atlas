@@ -44,6 +44,7 @@ npm run preview    # serves dist/ at http://localhost:4173/what-if-atlas/
 | `src/map/` | Map construction, the atlas style, the label layers, and the worker fix |
 | `src/tools/stroke.ts` | Pure geometry for the pen — buffering a path, clipping it. Runs in node. |
 | `src/ui/bookmarks.ts` | Saved views, and getting a thumbnail out of WebGL |
+| `src/state/persistence.ts` | Autosave to IndexedDB, and what it refuses to promise |
 | `src/dev/fps.ts` | Frame-rate probe — the milestone sign-off gate |
 | `src/ui/glass.css` | The glass system, ported from networkfieldnotes.com |
 | `probe.html` | **Milestone-0 device probe** — see below |
@@ -60,6 +61,18 @@ It has to run on the real iPad to mean anything. It is readable and reportable
 on-device because there is no usable console there: four guided tests with
 auto-detected verdicts, the Pencil's actual capabilities, and a **Copy report**
 button.
+
+## Autosave
+
+The scenario saves itself to IndexedDB and comes back on reload. Export is still
+the real backup, and the interface says so — on iOS, WebKit deletes IndexedDB
+after seven days without interaction unless the app has been added to the Home
+Screen, so the indicator reads "Saved on this device — add to the Home Screen,
+or Export, to keep it longer than a week" until `navigator.storage.persist()` is
+actually granted.
+
+PLAN.md §13 covers the four ways this could lose the work and what each one does
+instead, including why an unreadable save is moved aside rather than overwritten.
 
 ## Bookmarks
 

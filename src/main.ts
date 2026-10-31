@@ -21,6 +21,7 @@ import './ui/layout.css';
 import { atlasStyle, setLabelsVisible } from './map/style';
 import { LEVEL_DEFS, LEVELS, autoLevel, type Level } from './map/regions';
 import { ScenarioStore, emptyScenario, migrate, serialise } from './state/scenario';
+import { Persistence, type SaveState } from './state/persistence';
 import { PaintController, PaintRenderer, type NeighbourTable, type Tool } from './tools/paint';
 import { BorderFader } from './tools/borders';
 import { PenController, StrokeRenderer } from './tools/pen';
@@ -117,6 +118,7 @@ function reloadStyle(): void {
 
 const renderer = new PaintRenderer(map, store);
 const fader = new BorderFader(map, store);
+
 const strokes = new StrokeRenderer(map, store);
 const pen = new PenController(map, store, {
   getColor: () => color,
@@ -124,6 +126,75 @@ const pen = new PenController(map, store, {
   onChanged: refreshChrome,
 });
 new BookmarkPanel(map, store, { getLevel: currentLevel });
+
+// ── keeping the work ────────────────────────────────────────────────────────
+//
+// The editor used to forget everything on reload. Export has always existed,
+// but export is a thing you have to REMEMBER, and the people who most need the
+// work kept are the least likely to think of it.
+
+const saveNote = el('save-note');
+
+/**
+ * Say what actually happened, and never more than that.
+ *
+ * ⚠️ "Saved" IS NOT A PROMISE ON IOS. WebKit deletes IndexedDB after seven days
+ * without interaction unless the app has been added to the Home Screen, so the
+ * wording changes depending on whether `navigator.storage.persist()` was
+ * granted. An indicator that says "Saved" when it means "saved for about a
+ * week" is worse than no indicator.
+ */
+function showSaveState(s: SaveState): void {
+  saveNote.dataset.state = s.status;
+  if (s.status === 'saving') {
+    saveNote.textContent = 'Saving…';
+  } else if (s.status === 'saved') {
+    saveNote.textContent = s.durable
+      ? 'Saved on this device.'
+      : 'Saved on this device — add to the Home Screen, or Export, to keep it longer than a week.';
+  } else if (s.status === 'failed') {
+    saveNote.textContent = `${s.reason} Export keeps a copy.`;
+  } else {
+    saveNote.textContent = '';
+  }
+}
+
+const persistence = new Persistence(showSaveState);
+
+void persistence.load().then(({ scenario, problem }) => {
+  if (scenario) {
+    store.replace(scenario);
+    renderer.syncAll();
+    strokes.sync();
+    refreshChrome();
+    const { painted, hatched, strokes: drawn } = store.stats();
+    showSaveState({ status: 'saved', at: Date.now(), durable: false });
+    console.info(`restored ${painted} painted, ${hatched} occupied, ${drawn} drawn`);
+  } else if (problem) {
+    // Starting blank after a failed read looks exactly like starting blank for
+    // the first time. Say which it was.
+    showSaveState({ status: 'failed', reason: problem });
+  } else {
+    showSaveState({ status: 'idle' });
+  }
+  // Only subscribe AFTER the read: a change arriving mid-load must not write a
+  // blank scenario over the one still being read.
+  store.onChange(() => persistence.schedule(() => store.current));
+});
+
+// iOS kills a backgrounded tab without warning, and these are the last
+// reliable words the page gets.
+//
+// ⚠️ THE TWO EVENTS HAVE DIFFERENT TARGETS, and getting it wrong fails
+// silently. `visibilitychange` is fired AT THE DOCUMENT; it only reaches a
+// window listener by bubbling, which is true today but is not what the event
+// is for, and a listener that never runs looks exactly like a save that was
+// not needed. `pagehide` is a window event and covers the back/forward cache.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') void persistence.flush(() => store.current);
+});
+window.addEventListener('pagehide', () => void persistence.flush(() => store.current));
+
 const painter = new PaintController(map, store, {
   getColor: () => color,
   getLevel: currentLevel,

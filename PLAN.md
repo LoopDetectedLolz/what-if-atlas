@@ -1727,3 +1727,89 @@ this browser pane throttles to about 1 Hz, so the arrival is correct and the
 journey is unobservable — the same limitation as the border fade's easing and
 the pen's preview. Whether 2.2 s is right, and whether the curve feels like an
 atlas or like a video game, is one more thing for the iPad.
+
+---
+
+## 13. Autosave — and why "Saved" is a careful word here
+
+Until this, the editor forgot everything the moment the tab reloaded. Export has
+always existed, but export is a thing you have to REMEMBER to do, and the people
+who most need the work kept are the least likely to think of it. A twenty-minute
+drawing should survive a dropped tab.
+
+`idb` had been a declared dependency since milestone 0 and was imported nowhere;
+§3's own architecture listing named a `persistence.ts` that was never written.
+
+### The honest part
+
+⚠️ **IndexedDB ON IOS IS NOT STORAGE, IT IS A CACHE WITH GOOD MANNERS.** §3
+already recorded the rule for the offline tiles and it applies just as much to a
+2 KB drawing: WebKit deletes IndexedDB after **seven days without interaction**,
+and the exemption is for apps added to the Home Screen, not for tabs. A child who
+draws, then goes away for a fortnight, comes back to nothing.
+
+So the indicator does not say "Saved" and stop there. It says what is true:
+
+> Saved on this device — add to the Home Screen, or Export, to keep it longer
+> than a week.
+
+...and only drops the second half when `navigator.storage.persist()` has actually
+been granted, which exempts the origin. An indicator that says "Saved" when it
+means "saved for about a week" is worse than no indicator, because it is the
+reason someone will not bother to export.
+
+### Four ways this could lose the work, and what each one does instead
+
+- **Writing a blank over a real save.** The read is asynchronous; one tap
+  arriving before it finishes would otherwise persist an empty scenario straight
+  over the saved one — losing everything in order to save nothing. Nothing is
+  written until the first read has finished, and the change listener is not even
+  subscribed until then, so there is no window at all rather than a short one.
+- **A record that cannot be read.** It is moved to a second key and the live one
+  is deleted, rather than being overwritten by the blank scenario that replaces
+  it. An unreadable save may still be recoverable by hand; it is certainly not
+  improved by being written over. And the interface SAYS SO — "The last drawing
+  could not be read, so this one starts fresh" — because starting blank after a
+  failed read looks exactly like starting blank for the first time, and that is
+  the moment a child most needs telling.
+- **Running out of room.** The bookmark thumbnails are nearly all the bulk, so a
+  quota failure retries once without them. A drawing without its pictures is far
+  better than no drawing. Verified by making `IDBObjectStore.put` throw
+  `QuotaExceededError` on the write that carried a thumbnail: the retry landed,
+  the bookmark and its name survived, the picture did not.
+- **The tab being killed.** iOS discards a backgrounded tab without warning, so
+  the save also flushes immediately on the way out instead of waiting out its
+  debounce.
+
+### ⚠️ The two goodbye events do not have the same target
+
+`visibilitychange` is fired **at the document**. It reaches a `window` listener
+only by bubbling — which happens to work, but is not what the event is for, and
+a listener that never runs looks exactly like a save that was not needed.
+`pagehide` is a window event. They are now bound separately.
+
+This was a real bug in the first version of this code, and the first test passed
+anyway because the test dispatched the event at both targets. It was caught by
+asking what the BROWSER does rather than what the test did: dispatched the
+spec-accurate way, at the document alone, the window listener never fired.
+
+### Timing
+
+Writes are debounced 700 ms after the last change, because a pen sweep emits one
+change per region crossed — but never deferred more than 5 s, so someone drawing
+without pause is never far from a crash and a lost session.
+
+### Verified, 2026-10-30
+
+Paint three countries and save a bookmark, reload: all three come back with the
+bookmark, 7.4 KB in the store. A corrupt record is salvaged under its own key,
+the live one cleared, the failure reported in the toolbar in warning colour. A
+quota failure keeps the work and drops the pictures. A document-only
+`visibilitychange` flushes a change the debounce had not yet written. iPad
+portrait restores and the notice wraps to three lines inside the toolbar.
+
+**Not verified: the seven-day eviction itself**, which cannot be tested in an
+afternoon and is the whole reason the wording is what it is. Nor whether
+`navigator.storage.persist()` is granted on iPadOS — it is denied in this
+browser, and whether a Home Screen install flips it is one more thing for the
+device.
