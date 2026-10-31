@@ -43,6 +43,7 @@ npm run preview    # serves dist/ at http://localhost:4173/what-if-atlas/
 |---|---|
 | `src/map/` | Map construction, the atlas style, the label layers, and the worker fix |
 | `src/tools/stroke.ts` | Pure geometry for the pen — buffering a path, clipping it. Runs in node. |
+| `src/ui/bookmarks.ts` | Saved views, and getting a thumbnail out of WebGL |
 | `src/dev/fps.ts` | Frame-rate probe — the milestone sign-off gate |
 | `src/ui/glass.css` | The glass system, ported from networkfieldnotes.com |
 | `probe.html` | **Milestone-0 device probe** — see below |
@@ -59,6 +60,19 @@ It has to run on the real iPad to mean anything. It is readable and reportable
 on-device because there is no usable console there: four guided tests with
 auto-detected verdicts, the Pencil's actual capabilities, and a **Copy report**
 button.
+
+## Bookmarks
+
+Saved views — centre, zoom, bearing, pitch, named after whatever is under the
+middle of the map, with a thumbnail of what they look at. They live in the
+scenario file, so a saved atlas remembers its own tour.
+
+The thumbnail is the non-obvious part: MapLibre has no snapshot API, and the
+usual answer (`preserveDrawingBuffer: true`) costs something on every frame
+forever to serve a button pressed occasionally. Instead the capture reads the
+drawing buffer inside MapLibre's own `render` event, before the browser throws
+it away. PLAN.md §12 has the details, including why the result is checked for
+blankness rather than trusted.
 
 ## The free-hand pen
 

@@ -218,6 +218,27 @@ export class ScenarioStore {
     return true;
   }
 
+  // ── bookmarks ─────────────────────────────────────────────────────────────
+  //
+  // ⚠️ DELIBERATELY OUTSIDE THE UNDO STACK. Undo means "take back that paint".
+  // A child who saves a view, paints three countries and then taps undo wants
+  // the last country back, not the bookmark quietly deleted — and a bookmark
+  // removed by undo would be indistinguishable from one that failed to save.
+  // Bookmarks are still part of the scenario and still export and import; they
+  // are just not edits to the drawing.
+
+  addBookmark(bookmark: Bookmark): void {
+    this.scenario.bookmarks.push(bookmark);
+    this.emit([]);
+  }
+
+  removeBookmark(id: string): void {
+    const kept = this.scenario.bookmarks.filter((b) => b.id !== id);
+    if (kept.length === this.scenario.bookmarks.length) return;
+    this.scenario.bookmarks = kept;
+    this.emit([]);
+  }
+
   addStroke(stroke: Stroke): void {
     const edit: StrokeEdit = { kind: 'stroke', stroke, added: true };
     this.applyEdit(edit);
@@ -328,8 +349,50 @@ export function migrate(raw: unknown): Scenario {
     paint: mergeMaps(s.paint),
     hatch: mergeMaps(s.hatch),
     strokes: migrateStrokes(s.strokes),
-    bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : [],
+    bookmarks: migrateBookmarks(s.bookmarks),
   };
+}
+
+/**
+ * The largest thumbnail an imported file may carry, in characters of base64.
+ *
+ * ⚠️ A bookmark's `thumb` goes straight into an <img src>, and an imported
+ * scenario is a file from anywhere. Capturing one here produces about 6 KB, so
+ * 48 KB is generous for anything honest and refuses a file that would embed
+ * megabytes of something else under a name that sounds harmless.
+ */
+const MAX_THUMB = 48 * 1024;
+
+/** Keep only bookmarks that are actually bookmarks. */
+function migrateBookmarks(raw: unknown): Bookmark[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Bookmark[] = [];
+  for (const b of raw) {
+    if (!b || typeof b !== 'object') continue;
+    const v = b as Partial<Bookmark>;
+    const c = v.center;
+    if (!Array.isArray(c) || c.length !== 2) continue;
+    const [lng, lat] = c;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    if (Math.abs(lng) > 180 || Math.abs(lat) > 90) continue;
+    const num = (x: unknown, fallback: number) => (Number.isFinite(x) ? (x as number) : fallback);
+    // Only a real raster data URL, and only a small one. Anything else loses
+    // its picture and keeps its place in the list.
+    const thumb = typeof v.thumb === 'string'
+      && /^data:image\/(png|jpeg|webp);base64,/.test(v.thumb)
+      && v.thumb.length <= MAX_THUMB
+      ? v.thumb : undefined;
+    out.push({
+      id: typeof v.id === 'string' ? v.id : `b${out.length}`,
+      name: typeof v.name === 'string' && v.name ? v.name.slice(0, 80) : 'View',
+      center: [lng, lat],
+      zoom: Math.min(22, Math.max(0, num(v.zoom, 3))),
+      bearing: num(v.bearing, 0),
+      pitch: Math.min(85, Math.max(0, num(v.pitch, 0))),
+      ...(thumb ? { thumb } : {}),
+    });
+  }
+  return out;
 }
 
 /**

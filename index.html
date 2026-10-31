@@ -75,6 +75,21 @@
       <button id="label-btn" aria-pressed="true" title="Country, province and city names">Names on</button>
       <button id="hill-btn" aria-pressed="false" title="Terrain shading, fading in as you zoom">Relief off</button>
     </div>
+
+    <!-- Saved views. Collapsed by default: with thumbnails this grows taller
+         than everything above it, and the tools must stay reachable. -->
+    <div class="tb-row tb-marks">
+      <button class="marks-head" id="marks-head" aria-expanded="false" aria-controls="marks-body">
+        <span class="eyebrow">Bookmarks</span>
+        <span class="marks-count" id="marks-count">0</span>
+        <span class="marks-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="marks-body" id="marks-body" hidden>
+        <button id="mark-add" title="Remember where the map is now">Save this view</button>
+        <ul class="marks-list" id="marks-list"></ul>
+        <p class="marks-empty" id="marks-empty">Nothing saved yet. Move the map somewhere worth coming back to.</p>
+      </div>
+    </div>
   </div>
 
   <!-- What is under the pointer, and what a stroke would paint. -->

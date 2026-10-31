@@ -188,3 +188,96 @@ body.painting .readout { opacity: 1; }
 /* Four tools no longer fit side by side with labels at 316px. */
 .tb-tools { flex-wrap: wrap; }
 .tb-tools > button { flex: 1 1 calc(50% - var(--s2)); }
+
+/* ── bookmarks ───────────────────────────────────────────────────────────── */
+
+.marks-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  min-height: 38px;
+  padding: 0 var(--s2);
+  background: none;
+  border: none;
+  text-align: left;
+}
+.marks-head .eyebrow { flex: 1 1 auto; }
+.marks-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+}
+.marks-caret {
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: transform 180ms var(--ease);
+}
+.marks-head[aria-expanded="true"] .marks-caret { transform: rotate(180deg); }
+
+.marks-body { margin-top: var(--s2); }
+#mark-add { width: 100%; min-height: 40px; font-size: 13px; }
+
+.marks-list { list-style: none; margin: var(--s2) 0 0; padding: 0; }
+
+.mark {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* The row is one big target; the cross is a small one beside it. Sized so a
+   thumb landing anywhere on the picture or the name flies there. */
+.mark-go {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-height: 48px;
+  padding: 4px;
+  text-align: left;
+  overflow: hidden;
+}
+.mark-thumb {
+  width: 64px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--ocean, #B9D7EB);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+/* A view whose picture could not be captured still gets a tile, so the list
+   does not go ragged. */
+.mark-thumb-none { display: block; opacity: 0.35; }
+
+.mark-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mark-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mark-meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-muted); }
+
+.mark-del {
+  flex: 0 0 auto;
+  width: 34px;
+  min-height: 48px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.marks-empty {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: var(--s2) 0 0;
+}

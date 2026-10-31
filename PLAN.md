@@ -521,8 +521,6 @@ PMTiles serve over HTTP Range requests (`206 Partial Content` confirmed).
 
 **The shared-border fade** — the adjacency table it needs is now built.
 
-**Bookmarks** — the scenario model carries them; there is no UI.
-
 ---
 
 ## 4. Data, by licence
@@ -849,7 +847,7 @@ legibility gain, but the original was never broken.
 | **0** | Spike + skeleton. Vite, MapLibre v6, subpath deploy, glass theme, self-hosted fonts, Pencil probe, FPS harness. | **Built.** Pencil probe still needs a run on the real iPad. |
 | **E1** | Region tiles, snap levels, layered painting, sweep brush, fill, undo/redo, palette, export/import. | **Built and verified.** |
 | **E2** | Grid-anchored occupation hatching. | **Built and verified** — via a tile-anchored fill-pattern, not clipped geometry; see §3a for why. |
-| **E3** | Labels, then the shared-border fade, and bookmarks with thumbnails. | **Labels built and verified** — and with no glyph pipeline at all; see §9. Fade and bookmarks next. |
+| **E3** | Labels, then the shared-border fade, and bookmarks with thumbnails. | **Built and verified** — labels with no glyph pipeline (§9), the fade (§10), bookmarks with real thumbnails (§12). |
 | **E4** | Free-hand pen clipped within a single region, for shapes that are not whole regions. Eraser for strokes. | **Built and verified** — see §11. The full-geometry problem turned out not to block it. |
 | **E5** | Offline/PWA, iPad polish, performance pass. | |
 
@@ -1623,3 +1621,109 @@ show the frame rate. Whether the preview keeps up with a Pencil, whether 7 px is
 the right nib, and whether the commit hitch is noticeable all belong to the iPad
 session that already owes us `probe.html`, the frame-rate gate and the border
 fade's smoothness.
+
+---
+
+## 12. Bookmarks — and getting a picture of the map out of WebGL
+
+A bookmark is where the map was, not what was drawn on it: centre, zoom,
+bearing, pitch, a name, and a thumbnail of what it looks at. Tapping one flies
+back. They ride along in the scenario file, so a saved atlas remembers its own
+tour.
+
+### The thumbnail is the interesting part
+
+MapLibre has no snapshot API, and the usual answer — create the WebGL context
+with `preserveDrawingBuffer: true` — is the wrong trade here. That flag costs
+something on **every frame**, forever, on a map that has to stay smooth under a
+pen, to serve a button pressed once in a while.
+
+So the capture reads the buffer before the browser throws it away:
+
+```js
+map.on('render', onceOnly);   // inside this, the drawing buffer is still intact
+map.triggerRepaint();
+```
+
+⚠️ **The draw has to happen inside that event.** A moment later the buffer is
+gone and `toDataURL` returns a perfectly valid, perfectly blank image — no
+error, no warning, just an empty rectangle in the list. Measured here with the
+context attributes confirmed as `preserveDrawingBuffer: false`: read naively,
+29 KB of nothing; read inside the render event, a 445 KB PNG with 79 distinct
+colours.
+
+Only the DOWNSCALE happens in that window. Encoding the full 1132×838 canvas
+there would cost 445 KB and the time to make it; drawing it into a 160×100
+canvas takes about 5 ms and the encode can happen afterwards at leisure.
+
+**WebP, but checked.** It is about a fifth smaller than JPEG — 5.7 KB against
+6.8 KB, where PNG is 18.2 KB — but a browser that cannot encode WebP silently
+returns a PNG instead of failing, at three times the size under a name that
+looks right. So the returned data URL's own type is checked, and JPEG is the
+fallback. Measured in practice: 2.9–4.1 KB a thumbnail.
+
+**And the whole thing is allowed to fail.** If the trick does not work in some
+browser, `captureView` returns null and the bookmark saves without a picture —
+the row still gets a tile so the list does not go ragged. Blankness is detected
+by counting distinct colours rather than trusting the encode, because a blank
+capture is a *valid* image and nothing else would catch it.
+
+### Bookmarks are deliberately not undoable
+
+Undo means "take back that paint". A child who saves a view, paints three
+countries and taps undo wants the last country back — not the bookmark quietly
+deleted, which would be indistinguishable from one that never saved. So
+`addBookmark`/`removeBookmark` change the scenario and emit, but never touch the
+undo stack. They still export and import; they are simply not edits to the
+drawing. Verified: deleting a bookmark and pressing undo leaves the list alone.
+
+### Named by what it looks at, not by asking
+
+A prompt on a tablet is a keyboard in front of the map, and the answer is almost
+always the name of the place on screen. So a saved view takes the name of
+whatever is under the middle of it, at the editor's current snap level — a view
+saved while painting provinces is named after a province. Collisions become
+"Spain 2". Verified: Madrid, Roma, Tokyo, Hauts-de-Seine, each from one tap.
+
+### An imported file is a file from anywhere
+
+A bookmark's thumbnail goes straight into an `<img src>` and its name into
+markup, so `migrate()` now validates every field rather than trusting the shape.
+Verified against a real file import driven through the actual file input:
+
+- a `thumb` that is a remote `https://` URL — **dropped** (it would have been a
+  tracking pixel that fires whenever the list is opened)
+- a `thumb` that is an SVG data URL — **dropped** (SVG can carry script)
+- a `thumb` of 60 KB — **dropped**, 48 KB cap
+- `zoom: 99` → clamped to 22, `pitch: 400` → 85, `bearing: 'x'` → 0
+- centres that are out of range, NaN, or missing — the whole bookmark dropped
+- a name of `<img src=x onerror=...>` and an id crafted to break out of its
+  attribute — both rendered as plain text, neither payload fired
+
+### Smaller decisions
+
+- **Collapsed by default.** With thumbnails the list grows taller than
+  everything above it in a toolbar that already scrolls, and the tools have to
+  stay reachable.
+- **It scrolls itself into view after a save**, because otherwise on anything
+  shorter than a desktop a view saves itself out of sight and the button looks
+  broken.
+- **`prefers-reduced-motion` jumps instead of flying.** Someone who asked the
+  system for less motion still wants to get there.
+- **Flight curve 1.55, speed 1.1, capped at 2.2 s.** A little more arc than
+  MapLibre's default 1.42, so the world falls away and comes back, which is the
+  point of a bookmark in an atlas; capped so that comparing two places does not
+  mean waiting out a journey each time.
+
+### Verified, 2026-10-30
+
+Three views saved from one tap each with real thumbnails; flying from Tokyo to
+Madrid lands exactly on the stored centre and zoom; deleting removes the right
+one and undo leaves the list alone; a hostile import is defanged in every field;
+iPad portrait keeps 50 px rows and a reachable panel.
+
+**Not verified: the flight.** `flyTo` animates on `requestAnimationFrame`, which
+this browser pane throttles to about 1 Hz, so the arrival is correct and the
+journey is unobservable — the same limitation as the border fade's easing and
+the pen's preview. Whether 2.2 s is right, and whether the curve feels like an
+atlas or like a video game, is one more thing for the iPad.

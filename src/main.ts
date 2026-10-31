@@ -24,6 +24,7 @@ import { ScenarioStore, emptyScenario, migrate, serialise } from './state/scenar
 import { PaintController, PaintRenderer, type NeighbourTable, type Tool } from './tools/paint';
 import { BorderFader } from './tools/borders';
 import { PenController, StrokeRenderer } from './tools/pen';
+import { BookmarkPanel } from './ui/bookmarks';
 import { PALETTE, RESET } from './tools/palette';
 import type { SnapResult } from './tools/snap';
 import { ensureHatchNone, resetHatchImages, syncHatch } from './tools/hatch';
@@ -122,6 +123,7 @@ const pen = new PenController(map, store, {
   getLevel: currentLevel,
   onChanged: refreshChrome,
 });
+new BookmarkPanel(map, store, { getLevel: currentLevel });
 const painter = new PaintController(map, store, {
   getColor: () => color,
   getLevel: currentLevel,
