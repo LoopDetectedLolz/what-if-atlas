@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview", "--", "--port", "4173"],
       "port": 4173
+    },
+    {
+      "name": "atlas-like-pages",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["data/scripts/serve-like-pages.mjs"],
+      "port": 4178
     }
   ]
 }

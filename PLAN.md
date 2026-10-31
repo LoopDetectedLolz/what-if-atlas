@@ -1901,8 +1901,8 @@ hit can never be stale" — correct for `assets/*`, and wrong for
 `data/labels.json` and `data/neighbours.json`, which are served from fixed paths
 and cached first. A returning user would never receive an update to either.
 Tiles are safe only by accident: the worker skips range requests, so it never
-caches them at all. Not fixed here; it belongs with the offline work in E5,
-where the caching strategy is being rewritten anyway.
+caches them at all. **Fixed in §15**, which also records the two ways the first
+attempt at the fix measured the wrong thing.
 
 ### The rest of the self-check, same session
 
@@ -1923,3 +1923,107 @@ Everything else was re-run from a wiped store on the fixed build:
 | names toggle | 4 labels → 0 → 4 |
 | autosave | paint, strokes, bookmarks and the recomputed fade all restore |
 | export / import | round-trips exactly, 6.1 KB, stroke geometry and thumbnail intact |
+
+## 15. The service worker that froze the data files
+
+§14 recorded this and left it: `public/sw.js` cached `data/*.json` cache-first
+and for ever, on a comment that read *"Vite's filenames are content-hashed, so a
+cached hit can never be stale"*. True of `assets/*`, false of everything else.
+Fixed here.
+
+### What it cost
+
+Nothing visible, which is why it could have run for a year. The files pinned
+were `data/labels.json`, `data/neighbours.json`, `fonts.css`, `fonts/*.woff2`,
+`icons/*.png` and `manifest.webmanifest` — every one of them on a fixed path. A
+returning visitor was stuck with whatever copy they first downloaded, with no
+way out but clearing site data.
+
+`neighbours.json` is the one that would have hurt: it is what the fill tool
+floods across and what decides which borders may fade. A corrected adjacency
+table would never have arrived, and the symptom — fill stopping at the wrong
+coastline — looks nothing like a caching bug.
+
+### The strategy now
+
+| | |
+|---|---|
+| `assets/*` | cache-first. A content hash in the name means a hit cannot be stale. |
+| `tiles/*` | never stored. Read by Range request, and `Cache.put()` rejects a 206 — they escaped the old rule by accident, now deliberately. |
+| everything else | stale-while-revalidate, against the server's own `max-age`. |
+
+**The default is the fix, not the two exceptions.** A file added to `public/`
+later now inherits stale-while-revalidate, which is wrong for at most one load.
+The old default was wrong until the user wiped the site.
+
+Freshness is measured against the origin's own `Cache-Control`, so Pages'
+`max-age=600` for the JSON and `max-age=14400` for the fonts are each honoured
+at their own pace rather than on some number invented in the worker.
+
+### Three things that only showed up under test
+
+⚠️ **The age must come from our own stamp, not the response's `Date`.** A
+conditional refresh answered `304` is served out of the HTTP cache, and whether
+the stored `Date` is then updated is up to the engine. Where it is not, the copy
+is permanently past its max-age and *every* load fires a revalidation that can
+never settle it. Our own stamp converges by construction — and because both ends
+of the subtraction come from the same clock, an iPad that is minutes or hours out
+cancels instead of either freezing a file or storming the network.
+
+⚠️ **`Cache.addAll()` writes straight past `store()`.** The shell and
+`fonts.css` were precached that way and so carried no stamp — and an unstamped
+entry is stale by definition, so those two would have revalidated on every load
+for ever while the files beside them behaved. Found by listing the live cache,
+not by reading the code.
+
+⚠️ **A plain `fetch()` can be answered from the browser's HTTP cache without
+reaching the network**, which made both halves of the scheme measure the wrong
+thing: a background refresh would replace a stale copy with one exactly as
+stale and stamp it as new, and a cold miss would store a copy already up to
+`max-age` old and stamp it as current — stacking the HTTP cache's window on top
+of ours. `cache: 'no-cache'` forces a conditional request instead. It does not
+mean "download again": every file here has an ETag, so an unchanged 324 KB
+`neighbours.json` costs a `304` of a few hundred bytes.
+
+### `npm run preview` cannot test any of this
+
+None of the behaviour above exists without response headers vite preview does
+not send: no `max-age`, no `ETag`, no `Vary`. Against it every branch takes a
+path it would never take in production. Hence
+`data/scripts/serve-like-pages.mjs` (launch config `atlas-like-pages`), which
+serves `dist/` with the headers measured from the live site, answers `304` to a
+conditional GET, and supports Range so the tiles still stream.
+
+### Measured, on the real Cache API
+
+Old worker, server changed underneath it: the client served the stale table on
+load 1, 2, 3, 4 and 5 — one network request in total, and never the new file.
+New worker: stale copy served in **7 ms** with no network wait, the refresh
+landing behind it, and the corrected table on the next load. A day's worth of
+staleness across the whole app cost five `304`s and one `200` — the one file
+that had actually changed.
+
+### Still open, found by reviewing this change
+
+⚠️ **Offline does not work on the second visit, and the old comment claimed it
+did.** `src/main.ts` registers the worker from the window `load` event, which
+does not fire until every subresource of the first visit has already been
+fetched — so on visit 1 there is nothing left to intercept. The cache after a
+first visit holds the shell and `fonts.css` and **no `assets/` at all**;
+confirmed by listing it, not inferred. Visit 2 is the first load the worker sees
+end to end, which makes visit 3 the first that could work offline — and WebKit's
+seven-day eviction (§13) returns an idle iPad to visit 1 again and again. The
+fix is to precache the shell's hashed asset urls at install by reading them out
+of the shell HTML; moving the registration off `load` is not enough on its own.
+Not done here.
+
+⚠️ **A VERSION bump pulls the cache out from under an already-open page.**
+`install` skip-waits and `activate` deletes every other `atlas-` cache and
+claims live clients, so an atlas left open on an iPad across a deploy keeps
+running the old build against an almost-empty cache. The deletion is
+load-bearing — `caches.match()` searches every cache, so without it the old
+frozen copies would simply shadow the new ones — so this is a real tension, not
+an oversight. The install half is fixed: it no longer catches its own failure,
+so a precache that fails now discards the worker and leaves the previous one
+serving its intact cache, instead of promoting an empty one and wiping the good
+one on the way through.
