@@ -50,11 +50,14 @@
 
    Navigations stay network-first, so a deploy is picked up on the next load. */
 
-/* ⚠️ BUMP ON ANY CHANGE TO THIS FILE'S STRATEGY. activate() deletes every
-   other `atlas-` cache, which is the only way to reach a client already
-   holding a frozen copy from an earlier worker. It is also the escape hatch if
-   a future build ever needs the data files and the code to move together: a
-   bump purges both, so nothing survives one load out of step. */
+/* The name of this generation's cache.
+   Bump it to start a clean one — if a future build ever needs the data files
+   and the code to move together, say. It is no longer the blunt instrument it
+   was: a bump used to delete every other `atlas-` cache outright, which is
+   what made it dangerous while a page was open. activate() now keeps the
+   generation immediately before this one, and lookups start here, so the older
+   copies can serve a page still running the old build without ever shadowing
+   a current one. Bumping is cheap and safe; it is simply rarely needed. */
 var VERSION = 'atlas-v1';
 var SCOPE = new URL(self.registration.scope).pathname;
 
@@ -240,15 +243,68 @@ function fontsIn(css, base) {
   return out;
 }
 
+/**
+ * Clear out old generations — but not the one immediately before this.
+ *
+ * ⚠️ AN OPEN PAGE IS STILL RUNNING THE PREVIOUS BUILD. install() skip-waits and
+ * this claims every client, so an atlas left open on an iPad across a deploy
+ * keeps executing build A's code while the worker underneath it has become
+ * build B's. Deleting build A's cache in that moment takes the floor out: any
+ * file that page asks for afterwards — and a hashed chunk loaded late is one
+ * only build A's cache can have — misses, and offline it simply fails.
+ *
+ * The earlier version deleted everything regardless, and that WAS necessary
+ * while lookups went through `caches.match()`, which searches every cache in
+ * creation order: an old generation's copy would have shadowed the new one for
+ * ever, which is the very bug section 15 fixed. Lookups now start at the
+ * current cache (see `current()`), so an older generation can only ever answer
+ * a miss. That removes the reason to delete it, and with it the tension.
+ *
+ * One generation back is kept, which is as far as an open page can be behind;
+ * anything older goes. `caches.keys()` is in creation order, so the last of
+ * them is the one to keep.
+ */
 self.addEventListener('activate', function (e) {
   e.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) {
+      var old = keys.filter(function (k) {
         return k.indexOf('atlas-') === 0 && k !== VERSION;
-      }).map(function (k) { return caches.delete(k); }));
+      });
+      old.pop();
+      return Promise.all(old.map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });
+
+/**
+ * This worker's own cache. ⚠️ ALWAYS LOOK HERE FIRST — `caches.match()` walks
+ * every cache in creation order, so going straight to it would let the oldest
+ * copy of a file win for ever.
+ */
+function current(req) {
+  return caches.open(VERSION).then(function (c) { return c.match(req); });
+}
+
+/** Any generation, oldest first. Only ever consulted after `current` misses. */
+function anyGeneration(req) {
+  return caches.match(req);
+}
+
+/**
+ * Lift a previous generation's copy into this one, so the next load is a hit.
+ *
+ * ⚠️ THE CLONE IS TAKEN SYNCHRONOUSLY, before this function returns. The same
+ * response is being handed to the page at the same moment, and a body can only
+ * be read once: clone it inside the `caches.open` callback instead and by then
+ * the page has usually started reading, so the clone throws and the adoption
+ * silently never happens. It cost nothing visible — the file was still served
+ * from the older generation every time — which is exactly why it survived a
+ * unit test that read the body only after the adoption had finished.
+ */
+function adopt(req, res) {
+  var copy = res.clone();
+  return caches.open(VERSION).then(function (c) { return c.put(req, copy); });
+}
 
 /* When we stored a copy, by this device's clock. Set on the way into the cache
    by store(), read on the way out by isFresh(). */
@@ -368,9 +424,14 @@ self.addEventListener('fetch', function (e) {
         e.waitUntil(store(req, r));
         return r;
       }).catch(function () {
-        return caches.match(req).then(function (hit) {
-          return hit || caches.match(SCOPE);
-        });
+        // Offline. This generation's copy of the page, then this generation's
+        // shell, and only then an older one — otherwise `caches.match()` would
+        // hand back the PREVIOUS build's index.html, which is the oldest entry
+        // under that url and would win on creation order.
+        return current(req)
+          .then(function (hit) { return hit || current(SCOPE); })
+          .then(function (hit) { return hit || anyGeneration(req); })
+          .then(function (hit) { return hit || anyGeneration(SCOPE); });
       })
     );
     return;
@@ -379,11 +440,20 @@ self.addEventListener('fetch', function (e) {
   // Vite's own output: content-hashed, so a hit is final.
   if (path.indexOf('assets/') === 0) {
     e.respondWith(
-      caches.match(req).then(function (hit) {
+      current(req).then(function (hit) {
         if (hit) return hit;
-        return fetch(req).then(function (r) {
-          e.waitUntil(store(req, r));
-          return r;
+        // A page still running the previous build asking for one of ITS chunks.
+        // The name carries a content hash, so the bytes cannot be wrong — they
+        // are just filed under the last generation. Serve them and adopt them.
+        return anyGeneration(req).then(function (old) {
+          if (old) {
+            e.waitUntil(adopt(req, old));
+            return old;
+          }
+          return fetch(req).then(function (r) {
+            e.waitUntil(store(req, r));
+            return r;
+          });
         });
       })
     );
@@ -392,7 +462,7 @@ self.addEventListener('fetch', function (e) {
 
   // Everything else: stale-while-revalidate.
   e.respondWith(
-    caches.match(req).then(function (hit) {
+    current(req).then(function (hit) {
       if (hit) {
         // ⚠️ waitUntil, not a bare promise: a worker is free to be killed the
         // moment it has answered, and a floating fetch dies with it. That is
@@ -400,11 +470,22 @@ self.addEventListener('fetch', function (e) {
         if (!isFresh(hit)) e.waitUntil(refresh(req));
         return hit;
       }
-      // Cold miss: revalidate rather than accept whatever the HTTP cache has,
-      // so the stamp we write means "confirmed current", not "found lying about".
-      return fetchFresh(req.url).then(function (r) {
-        e.waitUntil(store(req, r));
-        return r;
+      return anyGeneration(req).then(function (old) {
+        if (old) {
+          // Same path, previous generation. Serve it so nothing breaks, but
+          // ALWAYS refresh regardless of its stamp: that stamp was taken
+          // against a build which is no longer the one running, and these are
+          // the unhashed files whose whole problem is that the name never
+          // changes. One load and this generation has its own copy.
+          e.waitUntil(refresh(req));
+          return old;
+        }
+        // Cold miss: revalidate rather than accept whatever the HTTP cache has,
+        // so the stamp we write means "confirmed current", not "found lying about".
+        return fetchFresh(req.url).then(function (r) {
+          e.waitUntil(store(req, r));
+          return r;
+        });
       });
     })
   );

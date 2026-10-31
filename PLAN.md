@@ -2028,10 +2028,10 @@ claims live clients, so an atlas left open on an iPad across a deploy keeps
 running the old build against an almost-empty cache. The deletion is
 load-bearing — `caches.match()` searches every cache, so without it the old
 frozen copies would simply shadow the new ones — so this is a real tension, not
-an oversight. The install half is fixed: it no longer catches its own failure,
-so a precache that fails now discards the worker and leaves the previous one
-serving its intact cache, instead of promoting an empty one and wiping the good
-one on the way through.
+an oversight. **Resolved in §17.** The install half was fixed here: it no
+longer catches its own failure, so a precache that fails discards the worker
+and leaves the previous one serving its intact cache, instead of promoting an
+empty one and wiping the good one on the way through.
 
 ## 16. Offline, which had never actually worked
 
@@ -2116,3 +2116,65 @@ runs once per version.
 The tile archives. They are read by Range request and `Cache.put()` rejects a
 206, so an offline launch is a working editor over empty ocean. That is §3's
 job and belongs in IndexedDB, not here.
+
+## 17. Surviving a deploy with the atlas still open
+
+The tension §15 left: `install` skip-waits and `activate` claimed every client
+and deleted every other `atlas-` cache. An atlas left open on an iPad across a
+deploy therefore kept executing build A's code while the worker underneath it
+had become build B's — with build A's cache gone.
+
+Deleting really was load-bearing, which is why it had stood. Lookups went
+through `caches.match()`, which walks **every cache in creation order**, so an
+older generation's copy of `labels.json` would have shadowed the new one for
+ever: §14's bug wearing a different hat.
+
+### Look in your own cache first
+
+That is the whole fix. `current()` opens the `VERSION` cache and matches there;
+only on a miss does `anyGeneration()` fall back to `caches.match()`. Once the
+current generation is consulted first, an older one can never shadow it — and
+deletion stops being load-bearing, so the old cache can safely be kept.
+
+`activate` now keeps the generation immediately before this one, which is as
+far behind as an open page can be, and deletes anything older. On a miss:
+
+- **a hashed asset** (`assets/…`) found in the previous generation is served
+  and *adopted* into the current one. The name carries a content hash, so the
+  bytes cannot be wrong — they are merely filed under the last build;
+- **an unhashed file** is served so nothing breaks, and then refreshed
+  **regardless of its stamp**, because that stamp was taken against a build
+  that is no longer running. One load and this generation has its own copy.
+
+The offline navigation fallback had to be reordered too: `caches.match(req)`
+would have returned the *previous* build's `index.html`, that being the oldest
+entry under the url. It now tries this generation's page, then this
+generation's shell, and only then an older one.
+
+### Measured, with VERSION bumped under a live page
+
+19 entries in `atlas-v1` plus a planted chunk only "build A" ever had; `VERSION`
+bumped; reloaded. `atlas-v1` kept at 20, `atlas-v2` built to 19 — both present.
+A copy of `data/neighbours.json` planted in `atlas-v1` reading
+`{"__marker":"OLD-GENERATION"}` did **not** win: the real 173-country table was
+served from `atlas-v2`. Then with the server stopped, build A's chunk was served
+from `atlas-v1` and adopted into `atlas-v2` (19 → 20), while a never-cached path
+still failed with `TypeError: Failed to fetch`.
+
+### The bug in the fix, and the test that could not see it
+
+`adopt()` first read `caches.open(VERSION).then(c => c.put(req, res.clone()))`.
+⚠️ **The clone has to be taken synchronously.** The same response is handed to
+the page at that moment and a body can only be read once, so by the time
+`caches.open` resolves the page has usually started reading and the clone
+throws — into `waitUntil`, where nothing surfaces it. Nothing looked wrong: the
+file was still served from the older generation every single time, just never
+adopted.
+
+The unit test asserted the adoption and **passed anyway**, twice over. It read
+the response body only after awaiting the `waitUntil` work, and its fake
+`caches.open` resolved on the next microtask, so the worker always won a race
+it loses against real disk-backed storage. Both were fixed — the harness now
+reads the body first, as a client does, and its cache stub takes a real tick —
+and the test was then checked the only way worth checking: by putting the bug
+back and confirming it fails. It does.
