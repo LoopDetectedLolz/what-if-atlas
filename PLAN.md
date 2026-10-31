@@ -1813,3 +1813,94 @@ afternoon and is the whole reason the wording is what it is. Nor whether
 `navigator.storage.persist()` is granted on iPadOS — it is denied in this
 browser, and whether a Home Screen install flips it is one more thing for the
 device.
+
+---
+
+## 14. The colour that vanished when you zoomed out
+
+Reported from use, not found by a test: *"when zooming out, some provinces and
+countries that were colored in go white again at some point."*
+
+### What was happening
+
+tippecanoe reduces "tiny polygons" at low zoom by default — anything smaller
+than about a pixel is accumulated into dust or dropped. That is right for a
+basemap and wrong for this one, because **a region that is not in the tile has
+no feature id, so its feature-state cannot be applied and it renders white**.
+
+Nothing was lost: the colour stayed in the scenario the whole time and came back
+on zooming in. But a child does not know that, and a map that forgets what you
+coloured is a map you stop trusting.
+
+Measured by decoding the archives and listing which feature ids are present at
+each zoom, rather than by looking at the screen:
+
+| archive | z0 | z1 | z2 | z3 | z4 | z5 | z6 | z7 |
+|---|---|---|---|---|---|---|---|---|
+| countries, of 254 | −29 | −16 | −6 | −3 | −3 | −3 | −2 | −1 |
+| provinces, of 4,596 | — | — | −170 | −64 | −14 | −2 | −1 | −1 |
+
+Luxembourg, Monaco, Andorra, San Marino, Liechtenstein and Gibraltar were all
+gone by z2. **Vatican City was absent from every zoom in both archives** — it
+could never be painted at all, at any zoom, and nobody had noticed.
+
+### The fix, and what it cost
+
+`--no-tiny-polygon-reduction`. Countries are now complete from z5, provinces
+from z3, and the Vatican is paintable from z3. The cost is nothing worth
+measuring: countries 3.64 → 3.66 MB, provinces 23.07 → 23.09 MB. Urban areas
+were already complete at every zoom, because they start at z4 where the blobs
+are big enough to survive.
+
+What it cannot fix is quantisation. A tile is a 4096-unit grid; at z0 the
+Vatican is about a ten-thousandth of one unit across, so there is no area for it
+to round to. Five micro-territories are still absent at the world view — Vatican
+City, Coral Sea Islands, Clipperton, Ashmore and Cartier, Scarborough Reef — and
+all five appear as you zoom in. Raising the tile detail does not help: even at
+65,536 units the Vatican is still under one unit at z0.
+
+### Why the existing guard did not catch it
+
+`build-tiles.sh` already carried a careful header about flags that must not be
+used, naming `--coalesce`, `--coalesce-smallest-as-needed` and
+`--drop-densest-as-needed`, all for exactly this reason. It missed the one that
+is **on by default**, which is the only one you do not have to type.
+
+And `data/README.md` claimed "every feature survives: 254 / 4,596 / 2,143 in,
+the same out" — a true-sounding check that counted distinct features across the
+whole archive instead of per zoom, and so could never have detected this. The
+check that would have caught it is the one now in PLAN: decode each tile and ask
+which ids are present at each level.
+
+### Verified, 2026-10-31
+
+Six states that used to vanish — Luxembourg, Liechtenstein, Monaco, Andorra,
+San Marino, Germany — painted and then checked against what is actually DRAWN at
+z0, z1, z2, z3, z4, z5 and z6. All six come back `drawn-coloured` at every zoom
+where they are in view.
+
+⚠️ Note for anyone testing this again: `map.getFeatureState()` returns the
+stored state whether or not the feature exists in the current tiles, so it
+reports success even while the map shows white. The honest test is
+`queryRenderedFeatures`, which only returns what the tiles actually carry. The
+first version of this check used `getFeatureState` and passed on a broken build.
+
+### The rest of the self-check, same session
+
+Everything else was re-run from a wiped store on the fixed build:
+
+| | |
+|---|---|
+| clean boot | 8 sources loaded, 20 layers, 5 tools, no failing resource of 83 |
+| painting | country, province and urban all apply and survive a z0↔z9 round trip |
+| fill | bounded to the continent |
+| hatching | persists to the scenario; two neighbours hatched alike keep their border |
+| eraser / undo / redo | erase removes, undo restores, redo removes again |
+| border fade | ESP\|PRT goes 1 → 0 on a match, ESP\|FRA untouched |
+| labels | render, including Vietnamese diacritics |
+| pen | dragged to x=284, ink stops at x=447, Spain ends at x=450 |
+| bookmarks | saved with a 3.4 KB thumbnail |
+| relief toggle | paint, fade, strokes and bookmarks all survive the restyle |
+| names toggle | 4 labels → 0 → 4 |
+| autosave | paint, strokes, bookmarks and the recomputed fade all restore |
+| export / import | round-trips exactly, 6.1 KB, stroke geometry and thumbnail intact |

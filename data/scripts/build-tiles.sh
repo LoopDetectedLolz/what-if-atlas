@@ -35,6 +35,28 @@
 #                                  tile is too big — silently destroys identity
 #   --drop-densest-as-needed       drops features — a country would vanish
 #
+# ⚠️ AND ONE THAT IS ON BY DEFAULT AND HAD TO BE TURNED OFF: tippecanoe reduces
+# "tiny polygons" at low zoom, replacing anything smaller than about a pixel
+# with accumulated dust or dropping it. That is right for a basemap and wrong
+# for this one, because a region that is not in the tile has no feature id, so
+# its feature-state cannot be applied and it renders WHITE. Colour in
+# Luxembourg at zoom 6, zoom out to the world view, and the colour is gone —
+# still in the scenario, just not drawable. Measured before the fix:
+#
+#   countries   29 of 254 missing at z0, 16 at z1, 6 at z2, and VATICAN CITY
+#               absent from EVERY zoom, so it could never be painted at all
+#   provinces   170 of 4,596 missing at z2, 64 at z3, 14 at z4
+#
+# --no-tiny-polygon-reduction fixes almost all of it and costs almost nothing:
+# countries 3.64 -> 3.66 MB, provinces 23.07 -> 23.09 MB. After it, countries
+# are complete from z5 and provinces from z3.
+#
+# What it cannot fix is quantisation: a tile is a 4096-unit grid, and at z0 the
+# Vatican is a ten-thousandth of one unit across, so it has no area to round to.
+# Five micro-territories are therefore still absent at the world view — Vatican
+# City, Coral Sea Islands, Clipperton, Ashmore and Cartier, Scarborough Reef —
+# and all five become paintable as you zoom in. See PLAN.md section 14.
+#
 # Instead: keep EVERY feature (-pf -pk), and control size with simplification
 # only. --no-simplification-of-shared-nodes (the non-deprecated replacement for
 # --detect-shared-borders) keeps a shared border from cracking into two
@@ -68,7 +90,7 @@ mkdir -p "$BUILD"
 # tippecanoe scratches in /tmp by default; honour TMPDIR so it works inside a
 # sandbox that only allows writes to the project dir and TMPDIR.
 TMP="${TMPDIR:-/tmp}"
-KEEP="-pf -pk --no-simplification-of-shared-nodes --reorder --hilbert --force -t $TMP"
+KEEP="-pf -pk --no-tiny-polygon-reduction --no-simplification-of-shared-nodes --reorder --hilbert --force -t $TMP"
 
 # name | source geojson | zoom range | simplification
 #

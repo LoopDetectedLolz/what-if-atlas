@@ -145,8 +145,22 @@ reasoning and the measured drift in [`../PLAN.md`](../PLAN.md) §10.
 `--coalesce-smallest-as-needed` and `--drop-densest-as-needed`. All three merge
 or drop features, and the editor paints regions **by feature id** — a merged
 feature cannot be coloured independently and a dropped one disappears from the
-map. Size is controlled by simplification alone, and every feature survives:
-254 / 4,596 / 2,143 in, the same out.
+map.
+
+⚠️ **And `--no-tiny-polygon-reduction`, which is the one that was missed.**
+tippecanoe reduces polygons smaller than about a pixel at low zoom by default.
+This README used to claim "every feature survives: 254 / 4,596 / 2,143 in, the
+same out", and that was wrong — it counted distinct features across the whole
+archive rather than per zoom. Measured per zoom before the fix:
+
+| archive | z0 | z1 | z2 | z3 | z4 | z5 |
+|---|---|---|---|---|---|---|
+| countries, of 254 | −29 | −16 | −6 | −3 | −3 | −3 |
+| provinces, of 4,596 | — | — | −170 | −64 | −14 | −2 |
+
+Vatican City was absent from **every** zoom and could never be painted at all.
+With the flag, countries are complete from z5 and provinces from z3, and the
+cost is 0.02 MB per archive. Full account in [`../PLAN.md`](../PLAN.md) §14.
 
 ### The `+00?` province ids are upstream's, not corruption
 
