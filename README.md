@@ -59,6 +59,19 @@ on-device because there is no usable console there: four guided tests with
 auto-detected verdicts, the Pencil's actual capabilities, and a **Copy report**
 button.
 
+## The fading borders
+
+Colour two neighbouring regions the same and the line between them fades out
+over 300 ms, so the pair reads as one bloc; coastlines never fade. This needs
+the region outlines cut apart at build time into borders and coastline, because
+MapLibre's opacity is per feature and a country's outline is one feature
+carrying both — `data/scripts/build-borders.mjs`, then its own PMTiles archives.
+
+PLAN.md §10 has the rest: why a border's id is a PAIR id, why the border
+archives must be cut with the same settings as the fills they sit on, what the
+colour-match rule does and does not cover, and why a continent fill snaps
+instead of easing.
+
 ## Labels
 
 The map draws its own place names with **no glyph pipeline, no font server and

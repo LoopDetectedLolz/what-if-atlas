@@ -22,6 +22,7 @@ import { atlasStyle, setLabelsVisible } from './map/style';
 import { LEVEL_DEFS, LEVELS, autoLevel, type Level } from './map/regions';
 import { ScenarioStore, emptyScenario, migrate, serialise } from './state/scenario';
 import { PaintController, PaintRenderer, type NeighbourTable, type Tool } from './tools/paint';
+import { BorderFader } from './tools/borders';
 import { PALETTE, RESET } from './tools/palette';
 import type { SnapResult } from './tools/snap';
 import { ensureHatchNone, resetHatchImages, syncHatch } from './tools/hatch';
@@ -99,10 +100,12 @@ function reloadStyle(): void {
     ensureHatchNone(map);
     syncHatch(map, store);
     renderer.syncAll();
+    fader.resync();
   });
 }
 
 const renderer = new PaintRenderer(map, store);
+const fader = new BorderFader(map, store);
 const painter = new PaintController(map, store, {
   getColor: () => color,
   getLevel: currentLevel,
@@ -115,7 +118,11 @@ const painter = new PaintController(map, store, {
 fetch(`${BASE}data/neighbours.json`)
   .then((r) => (r.ok ? r.json() : null))
   .then((t: NeighbourTable | null) => {
-    if (t) painter.setNeighbours(t);
+    if (t) {
+      painter.setNeighbours(t);
+      // The same table decides which borders may fade, so one fetch feeds both.
+      fader.setNeighbours(t);
+    }
     refreshChrome();
   })
   .catch(() => { /* fill still works, one region at a time */ });

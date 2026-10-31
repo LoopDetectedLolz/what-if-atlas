@@ -287,26 +287,29 @@ is a volunteer project with no SLA. Self-hosting is off the table — the planet
 
 ### The fading shared borders
 
-This is the headline feature and **MapLibre cannot do it natively.** Verified from source:
-no technique fades a *paint property per feature*. So:
+**Built.** The headline feature: colour two neighbours the same and the line between them
+fades out over 300 ms, so the pair reads as one bloc. Coastlines never fade. Full account in
+§10 — what follows is the shape of it.
 
-- **Build time:** precompute the shared-edge dataset — each border segment carrying both
-  neighbours' `ADM0_A3`. Coastlines are a separate layer and never fade.
-- **A few edges at a time** (selection, one border changing): numeric feature-state eased
-  in a `requestAnimationFrame` loop —
-  `'line-opacity': ['coalesce', ['feature-state','op'], 1]`, ~18 `setFeatureState` calls
-  per edge over 300 ms. **Not** `line-opacity-transition` with a boolean feature-state
-  (proven not to interpolate), and **never** a `match` expression rebuilt per frame with
-  `setPaintProperty` (proven to invalidate the whole layer).
-- **All ~700 edges at once:** switch technique rather than scaling that one — duplicate the
-  border layer and cross-fade `line-layer-opacity` (new in 6.0.0, data-constant and
-  genuinely transitionable). Bonus: it doesn't accumulate alpha where segments overlap, so
-  shared borders won't read double-dark mid-fade.
+- **Build time:** the region outlines are cut apart into shared borders and coastline, each
+  border its own feature carrying a PAIR id (`FRA|DEU`). Two archives, `borders` from the
+  country file and `subborders` from the province file, each cut with the same tippecanoe
+  settings as the polygons it belongs to so the line cannot drift off the colour boundary.
+  Measured: median 0 px of drift, worst 0.9 px, at every zoom including overzoom.
+- **The fade itself:** numeric feature-state eased in a `requestAnimationFrame` loop —
+  `'line-opacity': ['coalesce', ['feature-state','op'], 1]` — smoothstepped from 1 to 0.06
+  over 300 ms. **Not** `line-opacity-transition` with a boolean feature-state (proven not to
+  interpolate), and **never** a `match` expression rebuilt per frame with `setPaintProperty`
+  (proven to invalidate the whole layer).
+- **Bulk changes snap instead of easing.** Past 80 borders moving at once — a continent
+  fill — the change is applied directly. Easing hundreds of borders would mean hundreds of
+  paint-array uploads a frame to animate a detail nobody is watching, and a bulk operation
+  is not something the user is watching a transition of.
 
-Honest caveat: every per-feature opacity change triggers a full `gl.bufferSubData` of the
-layer's paint array. The ~200–250 KB/frame estimate for 700 segments is arithmetic from the
-code path, **not a measurement on an iPad**. This is the first thing the performance probe
-measures.
+⚠️ **The cost model this plan carried was wrong**, and §10 corrects it: MapLibre batches
+feature-state changes and applies them once per frame, so the cost scales with the number of
+TILES touched, not with the number of `setFeatureState` calls. The per-frame cost on an iPad
+is still **not measured**. It remains the first thing the performance probe measures.
 
 ### Pen and Apple Pencil
 
@@ -1228,3 +1231,151 @@ deployed site is fine, the exact inverse of the bug the rename cured.
 `vite.config.ts` now serves those files itself, with range support and no
 content encoding, for both `dev` and `preview`. Worth noticing that §8's own
 verification could not have caught this: it only ever tested the deployed site.
+
+---
+
+## 10. The shared-border fade — how it is actually done
+
+Colour Austria, Czechia, Slovakia and Hungary the same red and the lines between
+them disappear; what is left is one bloc with a border against Germany, Poland,
+Italy and Romania. That is the feature. This section is the parts of it that
+were not obvious.
+
+### A border has to be its own feature before it can fade
+
+MapLibre's opacity is per feature. A country polygon's outline is ONE feature
+carrying its coastline and every border it has, so fading it takes the coast
+with it. There is no expression that fades part of a feature, and none that
+reads another feature's state — which is the second half of the problem, because
+deciding whether a border fades means comparing the two regions on either side
+of it and a style expression can only see the feature it is drawing.
+
+So the outlines are taken apart at build time by `data/scripts/build-borders.mjs`.
+Every segment of every ring is counted by how many regions own it: one owner is
+coastline, two owners is the border between them. Output: 339 country border
+pairs and 10,769 province pairs, emitted ONCE each rather than twice as the
+polygons carry them.
+
+The comparison then happens in JavaScript against the scenario, and the answer
+is pushed into the border's own feature-state (`src/tools/borders.ts`).
+
+### Ids are pair ids, and that is what makes it cheap
+
+A border feature's id is `A|B`, the two region ids sorted. One border is usually
+several disjoint chains — broken by a lake, by a third country at a tripoint, by
+an island — and **every chain of a pair carries the same id**. MapLibre keys
+feature-state by id and applies it to every feature carrying that id, so one
+`setFeatureState` call fades a whole border however many pieces it is in. The
+France–Germany border is one call, not forty.
+
+⚠️ The sort order in `borderId()` and in the build script must agree. A
+disagreement silently fades nothing at all.
+
+### The lines must be cut with the same settings as the fills they sit on
+
+A border line is drawn directly on the seam between two fills, so if it is
+simplified differently from those fills it drifts off the colour boundary and
+the map shows a line *beside* the join instead of on it. `borders` therefore
+matches `countries` (z0–7, `--simplification=6`) and `subborders` matches
+`provinces` (z2–9, `--simplification=5`).
+
+That this works at all is down to `--no-simplification-of-shared-nodes`, which
+was already in the tile build for a different reason — it stops a shared border
+cracking into two slightly different lines and showing hairline gaps between
+neighbours. Because it preserves every node shared between features, the border
+vertices survive simplification in BOTH the polygons and the lines, and the two
+coincide exactly.
+
+Measured, not assumed, by comparing the rendered line geometry against the
+rendered fill geometry in screen pixels: **median 0 px, 99th percentile 0.6 px,
+worst 0.9 px** for country borders at z3, z5, z7.5 and z9.5; the same for
+coastline once vertices near the viewport edge are excluded, where the fill tile
+may simply not have loaded yet and the measurement is comparing against nothing.
+
+### The province coastline is deliberately missing
+
+`subborders` has borders only. The province coastline is the same line as the
+country coastline — 407,896 segments against 407,006 — and it is never seen,
+because the country coast is drawn over it, darker and wider at every zoom.
+Dropping it took the province border data from 862k vertices to 450k.
+
+### The rule, and the two readings of it that were rejected
+
+**A border fades when the regions on both sides are painted the same colour, at
+that border's own level.**
+
+- **White does not count.** `#FFFFFF` is the reset swatch, and the resting map is
+  white regions with every border drawn. A border vanishing between two
+  deliberately-whitened regions would read as a bug, not as a merge.
+- **Painting a country does not dissolve the province lines inside it.** The
+  rejected reading was "effective colour": a province with no paint of its own
+  inherits its country's, so painting France would fade all of France's internal
+  borders. It is consistent, and it is wrong for this map — those provinces were
+  not coloured, nothing was merged, and the child about to paint départements
+  inside blue France needs to see where they are.
+- **Colouring one French département and one German Land the same does not erase
+  the France–Germany line.** That is a country-level fact and it takes colouring
+  both countries. The province border between those two does fade, which is the
+  honest answer: those two provinces match, those two countries do not.
+
+Hatching is not considered. An occupied region is still a region with a border;
+the stripes say who holds it, and nothing has merged. Verified: Sweden and
+Finland both occupied in the same colour keep their border.
+
+### What is animated, and what is not
+
+⚠️ **This plan previously said every per-feature opacity change triggers a full
+`gl.bufferSubData` of the layer's paint array, and budgeted 200–250 KB a frame
+for 700 segments on that basis. That is not what the code does.** MapLibre
+batches state changes and applies them once per update cycle
+(`SourceFeatureState.coalesceChanges`, from `tile_manager.ts`), and each tile
+guards on a revision so its buckets rewrite at most once per pass. A hundred
+`setFeatureState` calls in one frame cost one bucket update per affected TILE,
+not a hundred uploads.
+
+Measured here, the JavaScript half is nothing at all: 80 calls in under 0.1 ms,
+2,000 in 0.8 ms. The cost that remains is the per-tile paint-array rewrite, and
+it scales with tiles touched — which is why the bound is still worth having, and
+why the case it protects is the one that touches every tile on screen:
+
+- A tap moves a handful of borders. Those ease — smoothstep, 1 → 0.06 over
+  300 ms. Linear reads as a hard switch at both ends.
+- A continent fill moves hundreds, across every tile in view. Past `EASE_LIMIT`
+  (80) the change is simply applied. Africa filled in one tap is 129 borders at
+  z2.6 and it is instant, which is also what a bulk operation should feel like.
+
+Work is bounded on the input side too: the fade walks the PAINTED regions and
+their neighbours, never the 11,000 borders in the data, and coalesces every edit
+that arrives before the next frame into one pass — a pen sweep calls
+`store.set()` once per region crossed.
+
+### Things that would have broken it
+
+- **`map.setStyle` throws away all feature-state.** The relief toggle calls it.
+  `BorderFader.resync()` puts the fades back without animating them, because
+  nothing changed for the user — they toggled the relief.
+- **Tiles arrive after the paint.** They need no help: MapLibre keeps
+  feature-state per source and pushes all of it into each tile as it loads
+  (`SourceFeatureState.initializeTileState`), so a border tile that arrives after
+  the paint comes up already faded. Read that before adding a `sourcedata`
+  re-apply like the one `PaintRenderer` carries.
+- **A border returning to full strength removes its state** rather than storing a
+  1. Every stored state is re-sent to every tile that loads, so a long session
+  would otherwise accumulate thousands of no-ops.
+
+### Verified, 2026-10-30
+
+On the dev server and the production build: Spain + Portugal + France merge and
+Andorra and Gibraltar stay outlined inside them; Austria + Czechia + Slovakia +
+Hungary merge with all five internal pairs faded and Germany, Italy and Poland
+untouched; Africa filled in one tap fades 129 borders and keeps every coastline;
+Yonne + Nièvre merge at province level with exactly one border faded and no
+country border touched; undo removes the fade and redo restores it; the relief
+toggle survives in both directions; hatching does not merge anything; iPad
+portrait and landscape both correct.
+
+The easing curve was checked by stepping the fader's clock deterministically —
+1 → 0.835 → 0.483 → 0.158 → 0.06 — because the browser pane throttles
+`requestAnimationFrame` to about 1 Hz and collapses the whole 300 ms into two
+frames. **The fade's smoothness, like the frame rate, has never been seen at a
+real frame rate.** It has to be watched on the iPad.

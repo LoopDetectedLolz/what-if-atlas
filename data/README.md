@@ -31,11 +31,15 @@ sh   data/scripts/fetch-sources.sh      # ~81 MB from the pinned v5.1.2 tag
 node data/scripts/build-regions.mjs     # normalise, assign stable ids
 node data/scripts/build-neighbours.mjs  # adjacency + continent table
 node data/scripts/build-labels.mjs      # label anchors for the map's place names
+node data/scripts/build-borders.mjs     # cut the outlines into borders and coastline
 sh   data/scripts/build-tiles.sh        # PMTiles (needs: brew install tippecanoe)
 ```
 
-Only the last three steps' outputs are committed. Fonts and icons change rarely
-and have their own scripts.
+Only the committed outputs matter: `public/tiles/*.pmtiles.gz` and
+`public/data/*.json`. Fonts and icons change rarely and have their own scripts.
+
+`build-tiles.sh` takes archive names, so iterating on one does not mean cutting
+all five: `sh data/scripts/build-tiles.sh borders subborders`.
 
 ## Current contents
 
@@ -44,6 +48,8 @@ and have their own scripts.
 | Countries (paintable) | `../public/tiles/countries.pmtiles.gz` | `ne_10m_admin_0_countries_usa` @ v5.1.2 | **Public domain** | 2026-10-30 | `build-regions.mjs` → `build-tiles.sh` |
 | Provinces (paintable) | `../public/tiles/provinces.pmtiles.gz` | `ne_10m_admin_1_states_provinces` | Public domain | 2026-10-30 | same |
 | Urban areas (paintable) | `../public/tiles/urban.pmtiles.gz` | `ne_50m_urban_areas` + `ne_50m_populated_places` for names | Public domain | 2026-10-30 | same |
+| Country borders + coastline | `../public/tiles/borders.pmtiles.gz` | cut out of `countries.geojson` | Public domain | 2026-10-30 | `build-borders.mjs` → `build-tiles.sh` |
+| Province borders | `../public/tiles/subborders.pmtiles.gz` | cut out of `provinces.geojson` | Public domain | 2026-10-30 | same |
 | Adjacency + continents | `../public/data/neighbours.json` | derived from the above | Public domain | 2026-10-30 | `build-neighbours.mjs` |
 | Label anchors | `../public/data/labels.json` | `LABEL_X`/`LABEL_Y` on admin-0, `latitude`/`longitude` on admin-1, `ne_50m_populated_places` | Public domain | 2026-10-30 | `build-labels.mjs` |
 | Placeholder basemap | `../public/data/placeholder-countries.geojson` | `ne_110m_admin_0_countries` | Public domain | 2026-10-30 | `build-placeholder.mjs` |
@@ -106,6 +112,32 @@ ones the two Latin subsets miss across all 5,500 region names.
 `fetch-fonts.sh` writes the ranges into `src/map/fonts.generated.ts`. Do not
 hand-edit them: Google's split is not the obvious one and a widened range hands
 characters to a file that does not contain them.
+
+### The borders are a separate dataset because a border has to fade on its own
+
+MapLibre's opacity is per feature, and a country polygon's outline is one
+feature carrying its coastline AND every border it has — fading it takes the
+coast with it. So `build-borders.mjs` counts every segment of every ring by how
+many regions own it: one owner is coastline, two owners is the border between
+them, emitted once rather than twice as the polygons carry it.
+
+Each border feature's id is the PAIR, `FRA|DEU`, and every disjoint chain of one
+border carries that same id, so a single `setFeatureState` fades the whole thing.
+339 country pairs, 10,769 province pairs.
+
+The script cross-checks itself against `neighbours.json`: the two are built from
+the same shared vertices and answer the same question, so a pair in one and not
+the other would mean a border that cannot fade or a fill that floods across a
+line still drawn. They agree exactly, 339 and 10,769, in both directions.
+
+⚠️ **`subborders` has no coastline, deliberately.** The province coastline is the
+same line as the country coastline and is never seen underneath it — that is
+nearly half the province border data saved for nothing visible.
+
+⚠️ **The border archives must be cut with the same tippecanoe settings as the
+polygons they belong to**, or the line drifts off the colour boundary it is
+drawing. `borders` matches `countries`, `subborders` matches `provinces`. Full
+reasoning and the measured drift in [`../PLAN.md`](../PLAN.md) §10.
 
 ### Tile flags that must not change
 
@@ -217,7 +249,8 @@ Full reasoning in [`../PLAN.md`](../PLAN.md) §4.
 | `scripts/build-regions.mjs` | Normalises the three paintable levels and assigns stable ids. |
 | `scripts/build-neighbours.mjs` | Builds the adjacency table from shared vertices, plus the continent lookup. Self-checking. |
 | `scripts/build-labels.mjs` | Builds the map's label anchors from Natural Earth's own label coordinates. |
-| `scripts/build-tiles.sh` | Cuts the PMTiles archives (needs `brew install tippecanoe`). |
+| `scripts/build-borders.mjs` | Cuts the region outlines into shared borders and coastline, so a border can fade on its own. Self-checking against the adjacency table. |
+| `scripts/build-tiles.sh` | Cuts the PMTiles archives (needs `brew install tippecanoe`). Takes archive names to cut just those. |
 | `scripts/fetch-fonts.sh` | Re-downloads the self-hosted fonts, regenerating `public/fonts.css` **and** `src/map/fonts.generated.ts`, which the map's `font-faces` are built from. |
 | `scripts/build-placeholder.mjs` | Builds the probe page's placeholder basemap from Natural Earth 110m. |
 | `scripts/build-icons.sh` | Renders the PWA icons from SVG (needs `brew install librsvg`). |

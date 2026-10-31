@@ -1,8 +1,10 @@
 #!/bin/sh
-# Cut the three paintable region layers into PMTiles archives.
+# Cut the region layers and the border lines into PMTiles archives.
 #
-# Input:   data/out/{countries,provinces,urban}.geojson  (build-regions.mjs)
+# Input:   data/out/{countries,provinces,urban}.geojson      (build-regions.mjs)
+#          data/out/borders-{country,province}.geojson       (build-borders.mjs)
 # Output:  public/tiles/{countries,provinces,urban}.pmtiles.gz
+#          public/tiles/{borders,subborders}.pmtiles.gz
 # Needs:   brew install tippecanoe   (felt/tippecanoe, 2.17+ writes PMTiles directly)
 #
 # ⚠️ THE OUTPUT FILES ARE NOT GZIPPED, DESPITE THE NAME. Do not "fix" the
@@ -39,7 +41,17 @@
 # slightly different lines, which would show as hairline gaps between
 # neighbours — very visible once both sides are coloured in.
 #
-# Usage: sh data/scripts/build-tiles.sh      (from the repo root)
+# ⚠️ THE BORDER ARCHIVES MUST BE CUT WITH THE SAME SETTINGS AS THE POLYGONS THEY
+# BELONG TO. A border line is drawn directly on top of the seam between two
+# fills, so if it is simplified differently from those fills it drifts off the
+# colour boundary and the map shows a line beside the join instead of on it.
+# borders matches countries, subborders matches provinces — zoom range and
+# --simplification both. Change one and change its pair.
+#
+# Usage: sh data/scripts/build-tiles.sh                  (all of them)
+#        sh data/scripts/build-tiles.sh borders          (just the named ones)
+#
+# Cutting everything takes minutes; naming one archive is how you iterate on it.
 
 set -eu
 
@@ -58,35 +70,52 @@ mkdir -p "$BUILD"
 TMP="${TMPDIR:-/tmp}"
 KEEP="-pf -pk --no-simplification-of-shared-nodes --reorder --hilbert --force -t $TMP"
 
-# Countries: paintable from the world view up. z0 holds all 254 in one tile.
-tippecanoe -o "$BUILD/countries.pmtiles" -l countries \
-  -Z0 -z7 --simplification=6 $KEEP \
-  data/out/countries.geojson
+# name | source geojson | zoom range | simplification
+#
+#   countries   paintable from the world view up; z0 holds all 254 in one tile
+#   provinces   4,596 features; min zoom 2 so the level is queryable just before
+#               it becomes the active snap level
+#   urban       small blobs, so they need detail rather than reach
+#   borders     country coastline and country borders, cut apart so a border can
+#               fade on its own; matches countries
+#   subborders  province borders only — the province coastline is the country
+#               coastline and is never seen under it; matches provinces
+ARCHIVES="
+countries  data/out/countries.geojson        -Z0 -z7  6
+provinces  data/out/provinces.geojson        -Z2 -z9  5
+urban      data/out/urban.geojson            -Z4 -z12 3
+borders    data/out/borders-country.geojson  -Z0 -z7  6
+subborders data/out/borders-province.geojson -Z2 -z9  5
+"
 
-# Provinces: 4,596 features. Min zoom 2 rather than 3 so the level is already
-# queryable just before it becomes the active snap level.
-tippecanoe -o "$BUILD/provinces.pmtiles" -l provinces \
-  -Z2 -z9 --simplification=5 $KEEP \
-  data/out/provinces.geojson
+wanted="$*"
+built=""
 
-# Urban areas: small blobs, so they need detail rather than reach.
-tippecanoe -o "$BUILD/urban.pmtiles" -l urban \
-  -Z4 -z12 --simplification=3 $KEEP \
-  data/out/urban.geojson
+echo "$ARCHIVES" | while read -r name src zmin zmax simp; do
+  [ -n "$name" ] || continue
+  case " $wanted " in
+    "  ") ;;                                  # no arguments: build everything
+    *" $name "*) ;;                           # named on the command line
+    *) continue ;;
+  esac
+  [ -f "$src" ] || { echo "missing input: $src — run the build script that makes it"; exit 1; }
+  echo "cutting $name from $src"
+  tippecanoe -o "$BUILD/$name.pmtiles" -l "$name" "$zmin" "$zmax" --simplification="$simp" $KEEP "$src"
 
-echo
-echo "layer metadata (source-layer names must match the style):"
-for f in "$BUILD"/*.pmtiles; do
-  echo "  $(basename "$f"):"
-  pmtiles show "$f" 2>/dev/null | sed -n 's/^/    /p' | head -12 || echo "    (install pmtiles for metadata: brew install pmtiles)"
+  # The source-layer name in src/map/*.ts must match -l above, and a mismatch
+  # renders an empty map with no error at all.
+  echo "  layer metadata:"
+  pmtiles show "$BUILD/$name.pmtiles" 2>/dev/null | sed -n 's/^/    /p' | head -8 \
+    || echo "    (install pmtiles for metadata: brew install pmtiles)"
+
+  # Install under the served name. See the header: the .gz is a serving
+  # workaround, not compression.
+  dest="$OUT/$name.pmtiles.gz"
+  cp "$BUILD/$name.pmtiles" "$dest"
+  printf '  installed %-26s %7.1f MB (NOT gzipped)\n' "$name.pmtiles.gz" \
+    "$(echo "scale=1; $(stat -f%z "$dest")/1048576" | bc)"
 done
 
-# Install under the served name. See the header: the .gz is a serving
-# workaround, not compression.
 echo
-echo "installed (NOT gzipped — see the header of this script):"
-for f in "$BUILD"/*.pmtiles; do
-  dest="$OUT/$(basename "$f").gz"
-  cp "$f" "$dest"
-  printf '  %-34s %7.1f MB\n' "$(basename "$dest")" "$(echo "scale=1; $(stat -f%z "$dest")/1048576" | bc)"
-done
+echo "done. Verify a deploy with: sh data/scripts/check-deploy.sh"
+echo "$built" >/dev/null

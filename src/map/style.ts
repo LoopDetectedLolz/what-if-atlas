@@ -1,5 +1,7 @@
 import type { StyleSpecification, LayerSpecification, ExpressionSpecification } from 'maplibre-gl';
-import { LEVEL_DEFS, LEVELS, NO_MATCH, snapOutlineLayerFor } from './regions';
+import {
+  BORDER_DEFS, COAST_LAYER, FADE_LEVELS, LEVEL_DEFS, LEVELS, NO_MATCH, snapOutlineLayerFor,
+} from './regions';
 import { LABEL_FACES } from './fonts.generated';
 // No cycle: hatch.ts does not import the style.
 import { HATCH_NONE } from '../tools/hatch';
@@ -84,6 +86,22 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
         }];
       }),
     ),
+    // The borders, cut out of the region outlines at build time so that one can
+    // fade without taking a coastline with it. Same promoteId trick as above:
+    // the id is a PAIR id, `A|B`, and every disjoint chain of one border
+    // carries it, so a single setFeatureState fades the whole thing.
+    ...Object.fromEntries(
+      FADE_LEVELS.map((l) => {
+        const d = BORDER_DEFS[l];
+        return [d.source, {
+          type: 'vector' as const,
+          url: `pmtiles://${base}${d.archive}`,
+          promoteId: { [d.sourceLayer]: 'id' },
+          attribution: ATTRIBUTION_NE,
+        }];
+      }),
+    ),
+
     // Free-hand strokes, clipped to their region. Written by the app (E4).
     strokes: { type: 'geojson', data: emptyFC() },
 
@@ -192,9 +210,21 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
   }
 
   // ── boundaries, fine to coarse so country lines draw on top ────────────
+  //
+  // ⚠️ ONLY THE CITY OUTLINE STILL COMES FROM A REGION SOURCE. Country and
+  // province lines are drawn from the border archives instead, because a border
+  // has to be its own feature before it can fade — see BORDER_DEFS. Urban areas
+  // keep their polygon outline: they are isolated blobs, so that outline is a
+  // city edge and never a shared border.
+  //
+  // `op` is the fade, written per border by src/tools/borders.ts. Absent means
+  // 1, so a border is fully drawn until something fades it, and a tile that
+  // arrives mid-fade is drawn at full strength until the next frame sets it.
+  const fade: ExpressionSpecification = ['coalesce', ['feature-state', 'op'], 1];
+
   layers.push(
     {
-      id: LEVEL_DEFS.urban.lineLayer,
+      id: 'urban-line',
       type: 'line',
       source: LEVEL_DEFS.urban.source,
       'source-layer': LEVEL_DEFS.urban.sourceLayer,
@@ -206,26 +236,44 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
       },
     },
     {
-      id: LEVEL_DEFS.province.lineLayer,
+      id: BORDER_DEFS.province.layer,
       type: 'line',
-      source: LEVEL_DEFS.province.source,
-      'source-layer': LEVEL_DEFS.province.sourceLayer,
+      source: BORDER_DEFS.province.source,
+      'source-layer': BORDER_DEFS.province.sourceLayer,
       paint: {
         'line-color': '#9FB4C2',
         'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 9, 1.0],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], 3.5, 0, 5, 0.9],
+        // ⚠️ The zoom reveal and the fade have to be ONE expression with zoom
+        // outermost: a zoom expression must be the outermost expression of a
+        // property, so multiplying one by a per-feature value is rejected. The
+        // per-feature part therefore rides inside the stops.
+        'line-opacity': ['interpolate', ['linear'], ['zoom'],
+          3.5, 0, 5, ['*', 0.9, fade]],
       },
     },
     {
-      id: LEVEL_DEFS.country.lineLayer,
+      id: COAST_LAYER,
       type: 'line',
-      source: LEVEL_DEFS.country.source,
-      'source-layer': LEVEL_DEFS.country.sourceLayer,
+      source: BORDER_DEFS.country.source,
+      'source-layer': BORDER_DEFS.country.sourceLayer,
+      filter: ['==', ['get', 'kind'], 'coast'],
       paint: {
         'line-color': '#5E7C90',
         'line-width': ['interpolate', ['linear'], ['zoom'], 0, 0.7, 4, 1.1, 8, 1.6],
-        // Per-feature, so the shared-border fade can drive it later.
-        'line-opacity': ['coalesce', ['feature-state', 'borderOpacity'], 1],
+      },
+    },
+    {
+      id: BORDER_DEFS.country.layer,
+      type: 'line',
+      source: BORDER_DEFS.country.source,
+      'source-layer': BORDER_DEFS.country.sourceLayer,
+      filter: ['==', ['get', 'kind'], 'border'],
+      paint: {
+        // Identical to the coastline above: together they are the one line the
+        // country outline used to draw, and they must not be told apart by eye.
+        'line-color': '#5E7C90',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 0, 0.7, 4, 1.1, 8, 1.6],
+        'line-opacity': fade,
       },
     },
   );

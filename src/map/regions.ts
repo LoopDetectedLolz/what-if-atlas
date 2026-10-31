@@ -42,8 +42,6 @@ export interface LevelDef {
   archive: string;
   /** Fill layer id — also what queryRenderedFeatures targets for snapping. */
   fillLayer: string;
-  /** Boundary line layer id. */
-  lineLayer: string;
   /** Zoom at or above which this becomes the automatic snap level. */
   activeFrom: number;
   /** Human label for the toolbar. */
@@ -59,7 +57,6 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     sourceLayer: 'countries',
     archive: 'tiles/countries.pmtiles.gz',
     fillLayer: 'country-fill',
-    lineLayer: 'country-line',
     activeFrom: 0,
     label: 'Country',
     labelPlural: 'countries',
@@ -70,7 +67,6 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     sourceLayer: 'provinces',
     archive: 'tiles/provinces.pmtiles.gz',
     fillLayer: 'province-fill',
-    lineLayer: 'province-line',
     activeFrom: 4.5,
     label: 'Province',
     labelPlural: 'provinces',
@@ -81,12 +77,76 @@ export const LEVEL_DEFS: Record<Level, LevelDef> = {
     sourceLayer: 'urban',
     archive: 'tiles/urban.pmtiles.gz',
     fillLayer: 'urban-fill',
-    lineLayer: 'urban-line',
     activeFrom: 8,
     label: 'City',
     labelPlural: 'cities',
   },
 };
+
+// ── borders ─────────────────────────────────────────────────────────────────
+
+/**
+ * The levels whose borders are drawn as features of their own, and so can fade.
+ *
+ * ⚠️ A BORDER CANNOT FADE WHILE IT IS PART OF A POLYGON. MapLibre's opacity is
+ * per feature, and a country polygon's outline is one feature carrying its coast
+ * and every border it has; fading it takes the coastline with it. So the
+ * outlines are cut apart at build time into shared borders and coastline — see
+ * data/scripts/build-borders.mjs — and the region sources now draw fills only.
+ *
+ * Urban areas are not here: they are isolated blobs with rural land between
+ * them, so no two of them share a border to fade.
+ */
+export const FADE_LEVELS = ['country', 'province'] as const;
+export type FadeLevel = (typeof FADE_LEVELS)[number];
+
+export interface BorderDef {
+  source: string;
+  sourceLayer: string;
+  /**
+   * PMTiles archive, relative to the app base. The `.gz` is a serving
+   * workaround and the file is NOT gzipped — see LevelDef.archive above and
+   * PLAN.md section 8.
+   */
+  archive: string;
+  /** Style layer drawing the borders that can fade. */
+  layer: string;
+}
+
+export const BORDER_DEFS: Record<FadeLevel, BorderDef> = {
+  country: {
+    source: 'borders',
+    sourceLayer: 'borders',
+    archive: 'tiles/borders.pmtiles.gz',
+    layer: 'country-border',
+  },
+  province: {
+    source: 'subborders',
+    sourceLayer: 'subborders',
+    archive: 'tiles/subborders.pmtiles.gz',
+    layer: 'province-border',
+  },
+};
+
+/**
+ * The coastline, which never fades. It lives in the country border archive
+ * alongside the country borders, told apart by the `kind` property; the
+ * province archive has no coastline of its own because it would be the same
+ * line, drawn underneath this one and never seen.
+ */
+export const COAST_LAYER = 'coast-line';
+
+/**
+ * The id a border feature carries: the two region ids, sorted.
+ *
+ * ⚠️ MUST MATCH `pairId` in data/scripts/build-borders.mjs. One border is
+ * usually several disjoint chains — broken by a lake, a tripoint, an island —
+ * and every chain carries this same id, so one setFeatureState call fades the
+ * whole border at once. A disagreement about the order silently fades nothing.
+ */
+export function borderId(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
 
 /** The finest level whose activation zoom has been reached. */
 export function autoLevel(zoom: number): Level {

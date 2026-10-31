@@ -76,7 +76,7 @@ done
 # wrong.
 say
 say "byte serving (browser-like Accept-Encoding):"
-for t in countries provinces urban; do
+for t in countries provinces urban borders subborders; do
   name="$t.pmtiles.gz"
   local_file="public/tiles/$name"
   real=''
