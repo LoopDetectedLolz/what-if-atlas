@@ -240,6 +240,13 @@ export function atlasStyle({ base, hillshade = false, labels = true }: StyleOpti
       type: 'line',
       source: BORDER_DEFS.province.source,
       'source-layer': BORDER_DEFS.province.sourceLayer,
+      // ⚠️ LOAD-BEARING, NOT COSMETIC. The opacity ramp below already hides this
+      // layer under zoom 3.5, but hidden is not unloaded: MapLibre only stops
+      // fetching a source when NO visible layer uses it, and `subborders` is
+      // used by this layer alone. Without a minzoom the world view downloads and
+      // uploads 15,885 line features that cannot be seen. A shade under 3.5, so
+      // the tiles are there by the time the ramp starts.
+      minzoom: 3.4,
       paint: {
         'line-color': '#9FB4C2',
         'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 9, 1.0],
