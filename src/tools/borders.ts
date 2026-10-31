@@ -133,10 +133,19 @@ export class BorderFader {
   /**
    * Re-apply from scratch after the style was replaced.
    *
-   * ⚠️ map.setStyle THROWS AWAY ALL FEATURE-STATE, so every fade written so far
-   * is gone and the borders come back at full strength. Nothing has changed on
-   * screen for the user — they toggled the relief — so the state is restored
-   * without animating it back.
+   * ⚠️ NOT because setStyle wipes the fades — it does not, and the comment in
+   * main.ts that says so is wrong. `map.setStyle(object)` defaults to the DIFF
+   * path (`Map._diffStyle` -> `Style.setState` -> `diffStyles`), which leaves
+   * untouched sources alone, so feature-state survives. Measured: a probe state
+   * written before the relief toggle is still there afterwards.
+   *
+   * This stays as insurance, because the diff path is not guaranteed. MapLibre
+   * forces a full rebuild when a style's sprite or glyphs change, and a caller
+   * passing `{diff: false}` gets one too. Re-applying is a few hundred cheap
+   * writes, and the state it restores is derived from the scenario anyway.
+   *
+   * Either way it does not animate: nothing changed on screen for the user —
+   * they toggled the relief — so a 300 ms fade-in would be a lie.
    */
   resync(): void {
     this.current.clear();

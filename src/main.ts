@@ -89,9 +89,17 @@ map.on('idle', () => document.body.classList.add('is-idle'));
 /**
  * Replace the style, then put back everything that lives outside it.
  *
- * setStyle discards the style's registered images and all feature-state, so the
- * stripe tiles have to be re-registered and the paint re-applied against the
- * new style — once, after it has loaded.
+ * ⚠️ THIS COMMENT USED TO SAY setStyle DISCARDS THE REGISTERED IMAGES AND ALL
+ * FEATURE-STATE. It does not. `map.setStyle(object)` defaults to the DIFF path
+ * (Map._diffStyle -> Style.setState -> diffStyles), which leaves untouched
+ * sources alone; measured on this style, a probe feature-state and a probe
+ * registered image both survive the relief toggle.
+ *
+ * The re-application below stays anyway, and cheaply: the diff path is not
+ * guaranteed — MapLibre forces a full rebuild if a style's sprite or glyphs
+ * change, and `{diff: false}` asks for one — and everything re-applied here is
+ * derived from the scenario, so doing it twice costs nothing and getting it
+ * wrong would silently lose a child's work.
  */
 function reloadStyle(): void {
   map.setStyle(atlasStyle({ base: BASE, hillshade: hillshadeOn, labels: labelsOn }));

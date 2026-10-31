@@ -1359,9 +1359,13 @@ that arrives before the next frame into one pass — a pen sweep calls
 
 ### Things that would have broken it
 
-- **`map.setStyle` throws away all feature-state.** The relief toggle calls it.
-  `BorderFader.resync()` puts the fades back without animating them, because
-  nothing changed for the user — they toggled the relief.
+- **`map.setStyle` does NOT throw away feature-state**, though this plan and a
+  comment in main.ts have both said so since milestone 0. `setStyle(object)`
+  defaults to the diff path, which leaves untouched sources alone; measured, a
+  probe feature-state AND a probe registered image both survive the relief
+  toggle. `BorderFader.resync()` stays as insurance, because a sprite or glyph
+  change forces a full rebuild and `{diff: false}` asks for one — and it does
+  not animate, because nothing changed for the user.
 - **Tiles arrive after the paint.** They need no help: MapLibre keeps
   feature-state per source and pushes all of it into each tile as it loads
   (`SourceFeatureState.initializeTileState`), so a border tile that arrives after
