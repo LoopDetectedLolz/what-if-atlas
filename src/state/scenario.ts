@@ -91,6 +91,16 @@ export interface StrokeEdit {
   stroke: Stroke;
   /** true = added, false = removed (eraser). */
   added: boolean;
+  /**
+   * Where in the list it sat, so undoing an erase puts it back where it was.
+   *
+   * ⚠️ ARRAY ORDER IS DRAW ORDER IS Z-ORDER. Without this, undoing an erase
+   * pushed the mark onto the end and it came back ON TOP of everything drawn
+   * since — and undoing a clear-all rebuilt the whole stack inside out, because
+   * the edits unwind in reverse. Silently rearranging a child's drawing is a
+   * worse failure than losing it, because nothing says it happened.
+   */
+  at?: number;
 }
 
 export type AnyEdit = Edit | StrokeEdit;
@@ -174,8 +184,12 @@ export class ScenarioStore {
 
   private applyEdit(e: AnyEdit): void {
     if (e.kind === 'stroke') {
-      if (e.added) this.scenario.strokes.push(e.stroke);
-      else this.scenario.strokes = this.scenario.strokes.filter((s) => s.id !== e.stroke.id);
+      if (e.added) {
+        const at = e.at ?? this.scenario.strokes.length;
+        this.scenario.strokes.splice(Math.min(at, this.scenario.strokes.length), 0, e.stroke);
+      } else {
+        this.scenario.strokes = this.scenario.strokes.filter((s) => s.id !== e.stroke.id);
+      }
       return;
     }
     const m = this.mapFor(e.kind, e.level);
@@ -213,9 +227,11 @@ export class ScenarioStore {
   }
 
   removeStroke(id: string): void {
-    const stroke = this.scenario.strokes.find((s) => s.id === id);
-    if (!stroke) return;
-    const edit: StrokeEdit = { kind: 'stroke', stroke, added: false };
+    const at = this.scenario.strokes.findIndex((s) => s.id === id);
+    if (at === -1) return;
+    const stroke = this.scenario.strokes[at];
+    // `at` rides along so the inverse of this edit can put it back in place.
+    const edit: StrokeEdit = { kind: 'stroke', stroke, added: false, at };
     this.applyEdit(edit);
     if (this.open) this.open.edits.push(edit);
     else this.undoStack.push({ label: 'erase', edits: [edit] }), (this.redoStack = []);

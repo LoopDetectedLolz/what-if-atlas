@@ -16,7 +16,7 @@
 import type { Map as MlMap, Point } from 'maplibre-gl';
 import { LEVEL_DEFS, LEVELS, STROKE_LAYER, type Level, type Region } from '../map/regions';
 import type { ScenarioStore } from '../state/scenario';
-import { snapAlong, snapAt, showSnapOutline, type SnapResult } from './snap';
+import { TOUCH_SLOP, snapAlong, snapAt, showSnapOutline, type SnapResult } from './snap';
 
 export type Tool = 'brush' | 'pen' | 'fill' | 'hatch' | 'eraser';
 
@@ -169,7 +169,7 @@ export class PaintController {
 
   extendStroke(point: Point): void {
     if (!this.painting || !this.last) return;
-    if (this.opts.getTool() === 'eraser') this.eraseStrokesAt(point);
+    if (this.opts.getTool() === 'eraser' && this.eraseStrokesAt(point)) return;
     // Interpolate: a fast drag yields sparse samples and would skip narrow
     // countries entirely.
     const hits = snapAlong(this.map, this.last, point, this.opts.getLevel());
@@ -192,7 +192,10 @@ export class PaintController {
   }
 
   private applyAt(point: Point): void {
-    if (this.opts.getTool() === 'eraser') this.eraseStrokesAt(point);
+    // A stroke erased is a stroke erased, and nothing else. Rubbing out a mark
+    // drawn on a country should not also strip the colour underneath it: that
+    // colour was laid down separately and the user is pointing at the mark.
+    if (this.opts.getTool() === 'eraser' && this.eraseStrokesAt(point)) return;
     const hit = snapAt(this.map, point, this.opts.getLevel());
     if (hit) this.paintRegion(hit);
   }
@@ -211,8 +214,16 @@ export class PaintController {
    */
   private eraseStrokesAt(point: Point): boolean {
     if (!this.map.getLayer(STROKE_LAYER)) return false;
+    // ⚠️ A BOX, NOT A POINT. A stroke's width is baked into the ground when it
+    // is drawn, so it shrinks on screen as you zoom out — a 7 px mark drawn at
+    // zoom 6 is under half a pixel wide at zoom 2. Hit-testing the single pixel
+    // under the pointer made the eraser feel broken on anything thin.
+    const box: [[number, number], [number, number]] = [
+      [point.x - TOUCH_SLOP, point.y - TOUCH_SLOP],
+      [point.x + TOUCH_SLOP, point.y + TOUCH_SLOP],
+    ];
     let removed = false;
-    for (const f of this.map.queryRenderedFeatures(point, { layers: [STROKE_LAYER] })) {
+    for (const f of this.map.queryRenderedFeatures(box, { layers: [STROKE_LAYER] })) {
       const id = f.properties?.id;
       if (typeof id === 'string') {
         this.store.removeStroke(id);

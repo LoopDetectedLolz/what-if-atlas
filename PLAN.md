@@ -1460,6 +1460,19 @@ follows a coarser border than you see after zooming in. And if the map is panned
 mid-stroke until part of the mark leaves the viewport, the clip can only use what
 is still on screen.
 
+Measured, for Italy's border, rather than guessed: a clip taken at zoom 3 sits at
+most **438 m** off the finest geometry the app ever draws, median 113 m. That is
+0.1 px at the zoom it was drawn at — invisible, and it stays invisible until you
+zoom a long way past where you were working: about 4 px at zoom 9 and 32 px at
+zoom 12.
+
+The fix, if it ever matters, is known: clip against the archive's MAXZOOM
+geometry pulled straight from PMTiles rather than against what the map happens
+to be rendering. That costs an MVT decoder in the bundle and a few range
+requests per stroke, to remove an error nobody can see at the zoom they are
+drawing at. Not taken. If a child ever draws at the world view and then zooms to
+a city and sees ink across a border, this is why, and that is the fix.
+
 ### Why the path is recorded in longitude and latitude
 
 Because a finger may pan or pinch WHILE the Pencil draws — the gesture model
@@ -1528,6 +1541,71 @@ stored as two polygons, both cut at the border.
   must be drawn again.
 - **The live preview is a line, not the real outline.** Building the outline
   costs tens of milliseconds and the preview has to keep up with the nib.
+
+### Three input bugs the pen exposed, all of them older than the pen
+
+Adding a tool that holds a gesture open for seconds at a time found faults that
+tap-to-paint had been hiding.
+
+- **Any finger ended the Pencil's stroke.** `pointerup`, `pointerleave` and
+  `pointercancel` all fire for every pointer on the element, and none of the
+  three handlers checked WHICH. So lifting the finger that had been panning the
+  map committed the half-drawn stroke and silently threw the rest away —
+  defeating the exact gesture the whole input model exists to support. The
+  handlers now key on the pointer that started the stroke. Verified: a stroke
+  survives both a finger's `pointerup` and a palm's `pointercancel` from other
+  pointers and commits its full length.
+- **A hovering Apple Pencil counted as drawing.** `paints()` accepted any `pen`
+  pointer regardless of `buttons`, and a Pencil reports `pointermove` while
+  hovering above the glass with `buttons === 0`. So `hover()` was unreachable on
+  the one device this is built for: no region outline, no toolbar readout. For
+  the pen that outline is the entire affordance — it is the boundary the stroke
+  is about to be cut at. Fixed by requiring `buttons === 1` for a pen as well as
+  a mouse, and verified: a hovering Pencil now names the region under the nib.
+- **The eraser hit-tested a single pixel.** A stroke's width is baked into the
+  ground when it is drawn, so it shrinks on screen as you zoom out — a 7 px mark
+  drawn at zoom 6 is under half a pixel wide at zoom 2 — and the eraser felt
+  broken on anything thin. It now uses the same 6 px box the snap tool uses.
+  Verified with a tap four pixels clear of the ink, which a bullseye test misses
+  and the box catches.
+
+And one in the scenario store: **undo silently rearranged a drawing.** Restoring
+an erased stroke pushed it onto the end of the list, and array order is draw
+order is z-order, so the mark came back on top of everything drawn since; undoing
+a clear-all rebuilt the whole stack inside out. The edit now carries the index it
+came from. Rearranging a child's drawing is worse than losing it, because nothing
+says it happened.
+
+### A correction to §10, in the half it did not cover
+
+§10 established that `map.setStyle` does NOT discard feature-state. **It does
+discard GeoJSON source data.** The two are kept in different places, and the
+diff path that preserves the one replaces the other — the strokes are a GeoJSON
+source and would vanish on every relief toggle without the explicit re-push in
+`reloadStyle`. Do not read §10 as a general statement that setStyle preserves
+everything.
+
+The same applies to the `labels` source, which is declared with a URL: each
+relief toggle re-fetches a megabyte of label anchors. Harmless on a desktop, not
+free on an iPad over school wifi, and worth fixing when the offline work lands.
+
+### Still unresolved: the pen and the finger genuinely fight
+
+Worth writing down precisely, because it is the gesture the brief is built on
+and it does not yet work the way the brief wants.
+
+`MapTouchEvent.preventDefault()` does not suppress one handler, it resets ALL of
+them. So a Pencil landing while a finger is mid-pan freezes that pan until the
+pen lifts. Worse: when the finger lifts first, `TouchPanHandler` re-arms with
+whatever contacts remain — which is the stylus — and the pen starts panning the
+map, with the ground following the nib.
+
+There is no clean fix from here. MapLibre cannot be told to ignore one touch,
+and the two obvious variants both fail: gating on all CURRENT touches rather
+than the changed ones lets the pen pan whenever a finger is also down, and
+gating on the changed ones is what produces the freeze. The real options are a
+custom pan handler or accepting it, and choosing between them needs the device.
+**This belongs at the top of the iPad list, with `probe.html`.**
 
 ### Verified, 2026-10-30
 

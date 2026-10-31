@@ -24,7 +24,7 @@ import {
 } from '../map/regions';
 
 /** How far from the tap point to look, in CSS pixels. A fingertip is blunt. */
-const TOUCH_SLOP = 6;
+export const TOUCH_SLOP = 6;
 
 export interface SnapResult extends Region {
   /** The level that was asked for, before any fallback. */

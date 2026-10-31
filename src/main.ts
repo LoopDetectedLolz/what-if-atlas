@@ -190,12 +190,36 @@ const pointAt = (e: PointerEvent): Point => {
   return new Point(e.clientX - r.left, e.clientY - r.top);
 };
 
-/** Does this pointer paint, rather than pan? */
+/**
+ * Does this pointer paint, rather than pan?
+ *
+ * ⚠️ `buttons` MATTERS FOR THE PENCIL TOO, not just the mouse. An Apple Pencil
+ * reports pointermove while HOVERING above the glass, with buttons === 0, and
+ * treating that as drawing meant hover() was never reached on the one device
+ * this app is built for — so the outline showing which region is under the nib,
+ * and the toolbar readout naming it, simply never appeared there. For the pen
+ * tool that outline is the whole affordance: it is the boundary the stroke is
+ * about to be cut at.
+ */
 const paints = (e: PointerEvent): boolean =>
-  e.pointerType === 'pen' || (e.pointerType === 'mouse' && e.buttons === 1);
+  (e.pointerType === 'pen' || e.pointerType === 'mouse') && e.buttons === 1;
+
+/**
+ * The pointer that is currently drawing or painting.
+ *
+ * ⚠️ WITHOUT THIS, ANY FINGER ENDS THE PEN'S STROKE. pointerup, pointerleave
+ * and pointercancel all fire for every pointer on the element, so lifting the
+ * finger that was panning the map committed the Pencil's half-drawn stroke and
+ * silently threw the rest of it away — which is precisely the gesture the whole
+ * input model exists to support.
+ */
+let drawingPointer: number | null = null;
 
 container.addEventListener('pointerdown', (e) => {
   if (!paints(e)) return;
+  // One stroke at a time: a second pen or button goes nowhere rather than
+  // interleaving its samples into the first stroke's path.
+  if (drawingPointer !== null) return;
 
   // The pen is the one tool that can decline a gesture: it draws on land, and
   // over water there is no region to clip to. Ask BEFORE preventing the
@@ -203,11 +227,13 @@ container.addEventListener('pointerdown', (e) => {
   // of being swallowed.
   if (tool === 'pen') {
     if (!pen.begin(pointAt(e), e.pressure, e.pointerType === 'pen')) return;
+    drawingPointer = e.pointerId;
     e.preventDefault();
     document.body.classList.add('painting');
     return;
   }
 
+  drawingPointer = e.pointerId;
   e.preventDefault();
   document.body.classList.add('painting');
   painter.beginStroke(pointAt(e));
@@ -217,7 +243,8 @@ container.addEventListener('pointerdown', (e) => {
 container.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return;      // fingers pan, never paint
   if (pen.active) {
-    pen.extend(pointAt(e), e.pressure, e.pointerType === 'pen');
+    // Only the nib that started the stroke adds to it.
+    if (e.pointerId === drawingPointer) pen.extend(pointAt(e), e.pressure, e.pointerType === 'pen');
     return;
   }
   if (paints(e)) painter.extendStroke(pointAt(e));
@@ -230,7 +257,9 @@ container.addEventListener('pointermove', (e) => {
 /** When a pointer-driven paint last ended, so the click path can stand down. */
 let lastPointerPaint = 0;
 
-const finish = (): void => {
+const finish = (e: PointerEvent): void => {
+  if (e.pointerId !== drawingPointer) return;
+  drawingPointer = null;
   if (!document.body.classList.contains('painting')) return;
   document.body.classList.remove('painting');
   if (pen.active) pen.end();
@@ -247,7 +276,9 @@ container.addEventListener('pointerleave', finish);
 // on iPadOS and it has still never been run on the device. Keeping matches
 // what painting does, and a wrong mark can be undone, where a lost one has to
 // be drawn again.
-container.addEventListener('pointercancel', () => {
+container.addEventListener('pointercancel', (e) => {
+  if (e.pointerId !== drawingPointer) return;
+  drawingPointer = null;
   document.body.classList.remove('painting');
   if (pen.active) pen.end();
   else painter.cancelStroke();
