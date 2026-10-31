@@ -1333,10 +1333,18 @@ guards on a revision so its buckets rewrite at most once per pass. A hundred
 `setFeatureState` calls in one frame cost one bucket update per affected TILE,
 not a hundred uploads.
 
+⚠️ But read the upload exactly, because it is not the shape you would guess:
+`VertexBuffer.updateData` is `gl.bufferSubData(ARRAY_BUFFER, 0, wholeArray)` —
+offset zero, the entire paint array for that tile's bucket, **the same size
+whether one border changed in it or three hundred did**. So the per-frame cost
+is (tiles containing something that changed) × (that tile's whole paint array),
+and fading ONE border costs the same per frame as fading every border in the
+same tiles.
+
 Measured here, the JavaScript half is nothing at all: 80 calls in under 0.1 ms,
-2,000 in 0.8 ms. The cost that remains is the per-tile paint-array rewrite, and
-it scales with tiles touched — which is why the bound is still worth having, and
-why the case it protects is the one that touches every tile on screen:
+2,000 in 0.8 ms. What is left is that per-tile rewrite, and it scales with tiles
+touched — which is why the bound is still worth having, and why the case it
+protects is the one that touches every tile on screen:
 
 - A tap moves a handful of borders. Those ease — smoothstep, 1 → 0.06 over
   300 ms. Linear reads as a hard switch at both ends.
@@ -1362,6 +1370,36 @@ that arrives before the next frame into one pass — a pen sweep calls
 - **A border returning to full strength removes its state** rather than storing a
   1. Every stored state is re-sent to every tile that loads, so a long session
   would otherwise accumulate thousands of no-ops.
+
+### The alternative to measure on the iPad, not here
+
+v6 has a primitive this does not use: a `global-state` reference inside a
+transitionable data-CONSTANT property. `line-layer-opacity: ['global-state',
+'borderFade']` plus one `setGlobalStateProperty` call starts a genuine eased GPU
+transition with no per-frame JavaScript and no paint-array upload at all — the
+whole 300 ms for one call instead of eighteen frames of `bufferSubData`.
+
+It is NOT adopted, and the reasons are worth writing down so nobody re-derives
+them:
+
+- Driving it needs the borders split across two layers — one for the borders
+  holding still, one for the cohort currently fading — with a boolean
+  feature-state picking which layer each border draws in. Whether that split
+  actually works in 6.16 is contested: `line-layer-opacity` takes only `zoom`
+  and `global-state` as expression parameters, so nothing per-feature can reach
+  inside it, and the design leans on a second expression on the same layer doing
+  the selecting.
+- One global-state key fades one cohort. Two borders changing 100 ms apart need
+  a key pool or a policy of snapping whatever is in flight.
+- `line-layer-opacity` renders the whole layer to a scratch framebuffer and
+  composites it, for as long as the transition runs. That is a full-viewport
+  pass that the current technique does not pay, and on an iPad it may well cost
+  more than the uploads it saves.
+
+So the two are a genuine trade — per-frame buffer uploads against a per-frame
+full-viewport pass — and neither has been measured on the device that matters.
+**That measurement belongs in the same iPad session as the frame-rate gate.**
+The version that ships is the one that is verified.
 
 ### Verified, 2026-10-30
 

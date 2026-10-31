@@ -32,8 +32,15 @@
  *
  * Country borders are cut from data/out/countries.geojson and province borders
  * from data/out/provinces.geojson, never from one file for both. Each line layer
- * then sits on top of the fills from the same source, simplified by the same
- * tippecanoe run, so it cannot drift off the colour boundary it is drawing.
+ * then sits on the fills cut from the same source with the same tippecanoe
+ * settings, so it does not drift off the colour boundary it is drawing.
+ *
+ * ⚠️ It is its OWN tippecanoe run, not the same one, and the alignment is very
+ * good rather than exact: measured median 0 px, worst 0.9 px, because
+ * --no-simplification-of-shared-nodes keeps every vertex shared between features
+ * in both the polygons and the lines. Putting both layers in ONE run was tried
+ * and is worse, not better — shared-node protection then retains border vertices
+ * in tiles where the matching fill has been dropped, and ITA|VAT drifts 6.3 px.
  *
  * It also sidesteps a real inconsistency between the two files: the country
  * layer uses Natural Earth's `_usa` point of view, where Somaliland, Northern
@@ -45,6 +52,10 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+// MapLibre's own id hash, reached through maplibre-gl's dependency on it. If
+// this import ever fails, MapLibre has changed how it keys feature ids and the
+// check at the bottom of this file needs revisiting rather than deleting.
+import murmur3 from 'murmurhash-js';
 
 const OUT = 'data/out';
 
@@ -269,4 +280,28 @@ for (const [level, file] of [['country', 'countries'], ['province', 'provinces']
     throw new Error(`${level}: ${onlyHere.length} borders have no entry in neighbours.json, ` +
                     `e.g. ${onlyHere.slice(0, 5).join(', ')} — the two builds disagree`);
   }
+
+  // ⚠️ MAPLIBRE DOES NOT KEY FEATURE STATE ON THE STRING. A non-numeric feature
+  // id is hashed to 32 bits with murmur3 (node_modules/maplibre-gl/src/data/
+  // feature_position_map.ts, getNumericId) and the lookup returns EVERY feature
+  // whose hash matches. Two border ids that collide would fade together, and
+  // only in the tiles that happen to contain both — a bug that would surface as
+  // one unrelated border in one country vanishing, months later, with nothing to
+  // connect it to.
+  //
+  // At 10,769 province pairs the birthday odds of at least one collision are
+  // about 1.3%, so this is cheap insurance rather than paranoia, and it is a
+  // refresh of Natural Earth that would introduce one.
+  const hashes = new Map();
+  for (const id of mine) {
+    const h = murmur3(String(id));
+    const other = hashes.get(h);
+    if (other !== undefined) {
+      throw new Error(`${level}: border ids "${id}" and "${other}" hash to the same ` +
+                      `murmur3 value (${h}). MapLibre would fade them together. ` +
+                      `Rename one of the regions' ids, or change borderId()'s separator.`);
+    }
+    hashes.set(h, id);
+  }
+  console.log(`  ids: ${mine.size} pairs, ${hashes.size} distinct murmur3 hashes (no collisions)`);
 }

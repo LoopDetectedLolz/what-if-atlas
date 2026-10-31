@@ -70,8 +70,17 @@ const FADE_MS = 300;
  */
 const EASE_LIMIT = 80;
 
-/** Opacity of a faded border. Not quite zero, so a merge still has a seam. */
-const FADED = 0.06;
+/**
+ * Opacity of a faded border: gone, not faint.
+ *
+ * Zero rather than a token 0.06, for two reasons. On screen a 6% line is
+ * invisible anyway, so the "seam" it was supposed to leave was never there. And
+ * MapLibre's line vertex shader discards a line's geometry outright below 0.01
+ * (shaders/glsl/line.vertex.glsl — it moves the vertex outside clip space), so
+ * a fully faded border costs no fragment work at all, while 0.06 pays to blend
+ * something nobody can see.
+ */
+const FADED = 0;
 
 interface Anim {
   level: FadeLevel;
